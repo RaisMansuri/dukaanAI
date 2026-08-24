@@ -10,12 +10,18 @@ export default function SignUpPage() {
   const router = useRouter();
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
+  const [mobileNumber, setMobileNumber] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  const handleMobileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const digits = e.target.value.replace(/\D/g, '').slice(0, 10);
+    setMobileNumber(digits);
+  };
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -24,6 +30,16 @@ export default function SignUpPage() {
 
     if (!fullName.trim()) {
       setErrorMsg('Full Name is required.');
+      return;
+    }
+
+    if (!email.trim()) {
+      setErrorMsg('Email Address is required.');
+      return;
+    }
+
+    if (mobileNumber.length !== 10) {
+      setErrorMsg('Please enter a valid 10-digit mobile number.');
       return;
     }
 
@@ -38,6 +54,7 @@ export default function SignUpPage() {
     }
 
     setLoading(true);
+    const fullMobile = `+91${mobileNumber}`;
 
     if (!isSupabaseConfigured()) {
       setTimeout(() => {
@@ -48,6 +65,19 @@ export default function SignUpPage() {
     }
 
     try {
+      // Check for duplicate mobile number in profiles table
+      const { data: existingMobile } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('mobile_number', fullMobile)
+        .maybeSingle();
+
+      if (existingMobile) {
+        setErrorMsg('This mobile number is already registered with another account.');
+        setLoading(false);
+        return;
+      }
+
       // 1. Create Auth User
       const { data, error } = await supabase.auth.signUp({
         email: email.trim(),
@@ -55,6 +85,7 @@ export default function SignUpPage() {
         options: {
           data: {
             full_name: fullName.trim(),
+            mobile_number: fullMobile,
           },
         },
       });
@@ -70,6 +101,7 @@ export default function SignUpPage() {
         const { error: profileErr } = await supabase.from('profiles').insert({
           id: data.user.id,
           full_name: fullName.trim(),
+          mobile_number: fullMobile,
         });
 
         if (profileErr) {
@@ -132,6 +164,7 @@ export default function SignUpPage() {
           )}
 
           <form onSubmit={handleSignUp} className="space-y-4">
+            {/* 1. Full Name */}
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1.5">
                 Full Name *
@@ -146,6 +179,7 @@ export default function SignUpPage() {
               />
             </div>
 
+            {/* 2. Email Address */}
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1.5">
                 Email Address *
@@ -160,6 +194,28 @@ export default function SignUpPage() {
               />
             </div>
 
+            {/* 3. Mobile Number */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                Mobile Number *
+              </label>
+              <div className="flex items-center">
+                <div className="flex h-[46px] items-center justify-center rounded-l-xl border border-r-0 border-slate-700 bg-slate-900 px-3.5 text-xs font-bold text-slate-300 shrink-0">
+                  +91
+                </div>
+                <input
+                  type="tel"
+                  required
+                  value={mobileNumber}
+                  onChange={handleMobileChange}
+                  placeholder="Enter 10 digit mobile number"
+                  maxLength={10}
+                  className="w-full h-[46px] rounded-r-xl border border-slate-700 bg-slate-950 py-3 px-4 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono"
+                />
+              </div>
+            </div>
+
+            {/* 4. Password */}
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1.5">
                 Password (Min. 6 characters) *
@@ -184,6 +240,7 @@ export default function SignUpPage() {
               </div>
             </div>
 
+            {/* 5. Confirm Password */}
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1.5">
                 Confirm Password *
@@ -198,6 +255,7 @@ export default function SignUpPage() {
               />
             </div>
 
+            {/* Submit Button */}
             <button
               type="submit"
               disabled={loading}

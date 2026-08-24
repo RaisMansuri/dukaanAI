@@ -423,7 +423,7 @@ export default function PosPage() {
 
   return (
     <AppLayout>
-      <div className="flex flex-col lg:flex-row gap-6 h-[calc(100vh-6rem)]">
+      <div className="flex flex-col lg:flex-row gap-6 min-h-0 lg:h-[calc(100vh-7.5rem)] pb-12 lg:pb-0">
         {/* LEFT COLUMN: Product Catalog & Search (60% width on Desktop) */}
         <div className="flex-1 flex flex-col space-y-4 min-w-0">
           {/* Search Bar & Barcode Scanner */}
@@ -864,7 +864,7 @@ export default function PosPage() {
 
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/75 p-4 backdrop-blur-sm">
-            <div className="w-full max-w-md rounded-3xl bg-white p-4 sm:p-5 shadow-2xl space-y-3 text-left border border-slate-100">
+            <div className="w-full max-w-md rounded-3xl bg-white p-4 sm:p-5 shadow-2xl space-y-3 text-left border border-slate-100 max-h-[90dvh] overflow-y-auto">
               {/* Modal Header */}
               <div className="flex items-center justify-between border-b pb-2.5">
                 <div className="flex items-center gap-2.5">
@@ -1062,7 +1062,7 @@ export default function PosPage() {
       {/* MANUAL CARD PAYMENT CONFIRMATION MODAL */}
       {showCardModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl space-y-5 text-left border border-slate-100">
+          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl space-y-5 text-left border border-slate-100 max-h-[90dvh] overflow-y-auto">
             {/* Header */}
             <div className="flex items-center justify-between border-b pb-3">
               <div className="flex items-center gap-3">
