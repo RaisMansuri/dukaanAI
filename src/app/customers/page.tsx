@@ -18,6 +18,7 @@ import {
   X,
 } from 'lucide-react';
 import Pagination from '@/components/common/Pagination';
+import { TableSkeleton, DataGridEmptyState, DataGridErrorState } from '@/components/common/GridStateComponents';
 import { Customer, PaymentMode } from '@/types/database';
 
 export default function CustomersPage() {
@@ -29,6 +30,8 @@ export default function CustomersPage() {
   const [pageSize] = useState(10);
   const [totalCount, setTotalCount] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [onlyPendingDue, setOnlyPendingDue] = useState(false);
@@ -68,23 +71,32 @@ export default function CustomersPage() {
   };
 
   const loadCustomers = async () => {
-    const data = await ApiService.getCustomers();
-    setCustomers(data);
+    setLoading(true);
+    setErrorMsg(null);
+    try {
+      const data = await ApiService.getCustomers();
+      setCustomers(data);
 
-    const paginatedRes = await ApiService.getPaginatedCustomers({
-      page,
-      pageSize,
-      search: searchTerm,
-    });
+      const paginatedRes = await ApiService.getPaginatedCustomers({
+        page,
+        pageSize,
+        search: searchTerm,
+      });
 
-    let resultData = paginatedRes.data;
-    if (onlyPendingDue) {
-      resultData = resultData.filter((c) => c.total_due > 0);
+      let resultData = paginatedRes.data;
+      if (onlyPendingDue) {
+        resultData = resultData.filter((c) => c.total_due > 0);
+      }
+
+      setDisplayedCustomers(resultData);
+      setTotalCount(onlyPendingDue ? resultData.length : paginatedRes.totalCount);
+      setTotalPages(onlyPendingDue ? Math.ceil(resultData.length / pageSize) || 1 : paginatedRes.totalPages);
+    } catch (err: any) {
+      console.error('[loadCustomers Error]', err);
+      setErrorMsg(err?.message || 'Failed to load customer records');
+    } finally {
+      setLoading(false);
     }
-
-    setDisplayedCustomers(resultData);
-    setTotalCount(onlyPendingDue ? resultData.length : paginatedRes.totalCount);
-    setTotalPages(onlyPendingDue ? Math.ceil(resultData.length / pageSize) || 1 : paginatedRes.totalPages);
   };
 
   useEffect(() => {
@@ -222,12 +234,16 @@ export default function CustomersPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-xs text-slate-800">
-                {filteredCustomers.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="p-8 text-center text-slate-400">
-                      No customers found matching search criteria.
-                    </td>
-                  </tr>
+                {loading ? (
+                  <TableSkeleton columns={5} rows={10} />
+                ) : errorMsg ? (
+                  <DataGridErrorState columns={5} error={errorMsg} onRetry={loadCustomers} />
+                ) : displayedCustomers.length === 0 ? (
+                  <DataGridEmptyState
+                    columns={5}
+                    title="No customers found"
+                    description="Try changing your search query or filter options."
+                  />
                 ) : (
                   displayedCustomers.map((cust) => {
                     const hasDue = cust.total_due > 0;
@@ -307,6 +323,7 @@ export default function CustomersPage() {
             pageSize={pageSize}
             totalCount={totalCount}
             totalPages={totalPages}
+            loading={loading}
             onPageChange={handlePageChange}
           />
         </div>

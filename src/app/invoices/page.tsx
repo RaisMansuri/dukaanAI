@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useTransition } from 'react';
 import AppLayout from '@/components/layout/AppLayout';
 import Pagination from '@/components/common/Pagination';
+import { TableSkeleton, DataGridEmptyState, DataGridErrorState } from '@/components/common/GridStateComponents';
 import { ApiService } from '@/services/api';
 import { formatRupee, formatDate } from '@/lib/utils';
 import { useAuth } from '@/context/AuthContext';
@@ -328,17 +329,13 @@ export default function InvoicesPage() {
               </thead>
               <tbody className="divide-y divide-slate-100 text-xs text-slate-800">
                 {loading ? (
-                  <tr>
-                    <td colSpan={8} className="p-8 text-center text-slate-400 font-semibold">
-                      Loading invoices...
-                    </td>
-                  </tr>
+                  <TableSkeleton columns={8} rows={10} />
                 ) : displayedInvoices.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className="p-8 text-center text-slate-400 font-semibold">
-                      No invoices found matching current search and filter criteria.
-                    </td>
-                  </tr>
+                  <DataGridEmptyState
+                    columns={8}
+                    title="No invoices found"
+                    description="Try changing your search query or payment filters."
+                  />
                 ) : (
                   displayedInvoices.map((inv) => {
                     const isPaid = String(inv.payment_status || '').toUpperCase() === 'PAID';
@@ -416,6 +413,7 @@ export default function InvoicesPage() {
             pageSize={pageSize}
             totalCount={totalCount}
             totalPages={totalPages}
+            loading={loading}
             onPageChange={handlePageChange}
           />
         </div>

@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import AppLayout from '@/components/layout/AppLayout';
+import { DashboardSkeleton } from '@/components/common/GridStateComponents';
 import { ApiService } from '@/services/api';
 import { formatRupee, formatDate } from '@/lib/utils';
 import {
@@ -50,12 +51,7 @@ export default function DashboardPage() {
   if (!stats) {
     return (
       <AppLayout>
-        <div className="flex h-64 items-center justify-center">
-          <div className="flex items-center gap-2 text-slate-500 font-medium">
-            <Sparkles className="h-5 w-5 animate-spin text-emerald-600" />
-            Loading Dashboard Stats...
-          </div>
-        </div>
+        <DashboardSkeleton />
       </AppLayout>
     );
   }
@@ -288,17 +284,6 @@ export default function DashboardPage() {
                   </div>
                 ))
               )}
-            </div>
-
-            {/* Quick AI Tip Card */}
-            <div className="rounded-2xl bg-gradient-to-br from-emerald-900 to-slate-900 p-4 text-white shadow-lg space-y-2">
-              <div className="flex items-center gap-1.5 text-amber-400 text-xs font-bold">
-                <Sparkles className="h-4 w-4" />
-                <span>AI Profit Tip</span>
-              </div>
-              <p className="text-xs text-slate-300 leading-relaxed">
-                Stock up on high-margin fast-moving items like <span className="text-white font-semibold">Tata Salt & Fortune Oil</span> before weekend demand peaks!
-              </p>
             </div>
           </div>
         </div>

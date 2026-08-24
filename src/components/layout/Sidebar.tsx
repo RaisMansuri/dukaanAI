@@ -63,25 +63,6 @@ export default function Sidebar() {
           })}
         </div>
 
-        {/* AI Helper Banner */}
-        <div className="rounded-2xl bg-gradient-to-br from-slate-900 to-slate-800 p-4 text-white shadow-lg relative overflow-hidden">
-          <div className="absolute -right-3 -bottom-3 opacity-10">
-            <Sparkles className="h-24 w-24 text-emerald-400" />
-          </div>
-          <div className="flex items-center gap-2 text-amber-400 font-bold text-xs mb-1">
-            <Sparkles className="h-3.5 w-3.5" />
-            <span>AI Dukaan Assistant</span>
-          </div>
-          <p className="text-xs text-slate-300 leading-snug mb-3">
-            Auto-generate HSN tax codes & track low stock alerts seamlessly.
-          </p>
-          <Link
-            href="/pos"
-            className="inline-flex items-center gap-1 text-xs font-bold text-emerald-400 hover:text-emerald-300 transition-colors"
-          >
-            Start Billing <ChevronRight className="h-3 w-3" />
-          </Link>
-        </div>
       </aside>
 
       {/* Mobile Bottom Navigation Bar */}

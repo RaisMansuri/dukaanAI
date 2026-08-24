@@ -44,10 +44,17 @@ export default function ProtectedRoute({ children }: { children: React.ReactNode
 
   if (loading && isSupabaseConfigured()) {
     return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-white">
-        <div className="flex flex-col items-center gap-3">
-          <Sparkles className="h-8 w-8 animate-spin text-emerald-400" />
-          <p className="text-sm font-semibold text-slate-300">Authenticating DukaanAI...</p>
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white p-4">
+        <div className="w-full max-w-sm rounded-3xl bg-slate-800 p-8 border border-slate-700 shadow-2xl space-y-4 animate-pulse">
+          <div className="flex items-center gap-3 justify-center">
+            <div className="h-10 w-10 rounded-2xl bg-emerald-500/20 border border-emerald-500/30" />
+            <div className="h-6 w-32 bg-slate-700 rounded-lg" />
+          </div>
+          <div className="h-4 w-48 bg-slate-700/60 rounded mx-auto" />
+          <div className="space-y-2 pt-2">
+            <div className="h-10 bg-slate-700 rounded-xl" />
+            <div className="h-10 bg-slate-700 rounded-xl" />
+          </div>
         </div>
       </div>
     );

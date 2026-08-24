@@ -68,22 +68,8 @@ export default function Navbar() {
         </Link>
       </div>
 
-      {/* Action Controls & Badges */}
+      {/* Action Controls */}
       <div className="flex items-center gap-2 sm:gap-3">
-        {/* Data Source Badge */}
-        <div className="hidden md:flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 border border-slate-200">
-          {isSupabase ? (
-            <>
-              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-              <span>Supabase Live</span>
-            </>
-          ) : (
-            <>
-              <Database className="h-3.5 w-3.5 text-amber-600" />
-              <span>Mock Engine</span>
-            </>
-          )}
-        </div>
 
         {/* Quick POS Action */}
         <Link

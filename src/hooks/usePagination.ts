@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { PaginatedResult } from '@/types/database';
 
 interface UsePaginationOptions<T, F> {
@@ -19,7 +19,10 @@ export function usePagination<T, F extends Record<string, any>>({
   const [totalCount, setTotalCount] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const requestIdRef = useRef(0);
 
   // Sync page number from URL on mount
   useEffect(() => {
@@ -41,6 +44,7 @@ export function usePagination<T, F extends Record<string, any>>({
   };
 
   const handlePageChange = (newPage: number) => {
+    if (loading) return;
     setPage(newPage);
     updateUrlPage(newPage);
   };
@@ -52,18 +56,26 @@ export function usePagination<T, F extends Record<string, any>>({
   };
 
   const refresh = async () => {
+    const currentRequestId = ++requestIdRef.current;
     setLoading(true);
     setError(null);
     try {
       const res = await fetcher({ page, pageSize, ...filters });
-      setData(res.data);
-      setTotalCount(res.totalCount);
-      setTotalPages(res.totalPages);
+      if (currentRequestId === requestIdRef.current) {
+        setData(res.data);
+        setTotalCount(res.totalCount);
+        setTotalPages(res.totalPages);
+      }
     } catch (err: any) {
-      console.error('[usePagination Fetch Error]', err);
-      setError(err?.message || 'Failed to fetch paginated records');
+      if (currentRequestId === requestIdRef.current) {
+        console.error('[usePagination Fetch Error]', err);
+        setError(err?.message || 'Failed to load records from database');
+      }
     } finally {
-      setLoading(false);
+      if (currentRequestId === requestIdRef.current) {
+        setLoading(false);
+        setInitialLoading(false);
+      }
     }
   };
 
@@ -78,6 +90,7 @@ export function usePagination<T, F extends Record<string, any>>({
     totalCount,
     totalPages,
     loading,
+    initialLoading,
     error,
     filters,
     setPage: handlePageChange,

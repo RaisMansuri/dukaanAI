@@ -19,6 +19,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import Pagination from '@/components/common/Pagination';
+import { TableSkeleton, DataGridEmptyState, DataGridErrorState } from '@/components/common/GridStateComponents';
 import { Product, UnitType } from '@/types/database';
 
 export default function ProductsPage() {
@@ -257,81 +258,48 @@ export default function ProductsPage() {
               </thead>
               <tbody className="divide-y divide-slate-100 text-xs text-slate-800">
                 {loading ? (
-                  <tr>
-                    <td colSpan={6} className="p-12 text-center text-slate-400">
-                      <div className="flex flex-col items-center gap-2">
-                        <RefreshCw className="h-6 w-6 animate-spin text-emerald-600" />
-                        <span>Loading Supabase products inventory...</span>
-                      </div>
-                    </td>
-                  </tr>
+                  <TableSkeleton columns={6} rows={10} />
                 ) : errorMsg ? (
-                  <tr>
-                    <td colSpan={6} className="p-8 text-center text-amber-800 bg-amber-50">
-                      <div className="flex flex-col items-center gap-2">
-                        <AlertTriangle className="h-6 w-6 text-amber-600" />
-                        <span className="font-bold">Supabase Query Error: {errorMsg}</span>
+                  <DataGridErrorState columns={6} error={errorMsg} onRetry={loadProducts} />
+                ) : displayedProducts.length === 0 ? (
+                  <DataGridEmptyState
+                    columns={6}
+                    title="No products found"
+                    description="Try changing your search query or category filter."
+                    actionButton={
+                      <div className="flex items-center justify-center gap-2 pt-1">
                         <button
-                          onClick={loadProducts}
-                          className="mt-2 rounded-xl bg-amber-600 px-4 py-2 text-xs font-bold text-white shadow-md hover:bg-amber-700"
+                          type="button"
+                          onClick={() => {
+                            setEditingProduct({
+                              name: '',
+                              name_hindi: '',
+                              category: 'Groceries',
+                              barcode: Math.floor(1000000000000 + Math.random() * 9000000000000).toString(),
+                              price: 100,
+                              cost_price: 80,
+                              gst_rate: 5,
+                              hsn_code: '1902',
+                              stock_qty: 20,
+                              min_stock_alert: 5,
+                              unit: 'Pcs',
+                            });
+                            setShowProductModal(true);
+                          }}
+                          className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white shadow-md hover:bg-emerald-700"
                         >
-                          Retry Query
+                          <Plus className="h-4 w-4" /> Add Product
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSeedProducts}
+                          className="flex items-center gap-1.5 rounded-xl border border-amber-400 bg-amber-50 px-3.5 py-2 text-xs font-bold text-amber-900 shadow-sm hover:bg-amber-100"
+                        >
+                          <Sparkles className="h-4 w-4 text-amber-600" /> Seed Samples
                         </button>
                       </div>
-                    </td>
-                  </tr>
-                ) : products.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="p-12 text-center">
-                      <div className="flex flex-col items-center gap-3">
-                        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600">
-                          <Package className="h-7 w-7" />
-                        </div>
-                        <div>
-                          <div className="font-bold text-base text-slate-900">No Products Found in Supabase</div>
-                          <div className="text-xs text-slate-500 mt-1 max-w-sm">
-                            Your Supabase <code className="bg-slate-100 px-1 py-0.5 rounded text-emerald-700 font-mono">products</code> table is currently empty.
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-3 mt-2">
-                          <button
-                            onClick={() => {
-                              setEditingProduct({
-                                name: '',
-                                name_hindi: '',
-                                category: 'Groceries',
-                                barcode: Math.floor(1000000000000 + Math.random() * 9000000000000).toString(),
-                                price: 100,
-                                cost_price: 80,
-                                gst_rate: 5,
-                                hsn_code: '1902',
-                                stock_qty: 20,
-                                min_stock_alert: 5,
-                                unit: 'Pcs',
-                              });
-                              setShowProductModal(true);
-                            }}
-                            className="flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white shadow-md hover:bg-emerald-700"
-                          >
-                            <Plus className="h-4 w-4" /> Add First Product
-                          </button>
-
-                          <button
-                            onClick={handleSeedProducts}
-                            className="flex items-center gap-2 rounded-xl border border-amber-400 bg-amber-50 px-4 py-2.5 text-xs font-bold text-amber-900 shadow-sm hover:bg-amber-100"
-                          >
-                            <Sparkles className="h-4 w-4 text-amber-600" /> Seed Sample Kirana Items
-                          </button>
-                        </div>
-                      </div>
-                    </td>
-                  </tr>
-                ) : displayedProducts.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="p-8 text-center text-slate-400">
-                      No products found matching filters.
-                    </td>
-                  </tr>
+                    }
+                  />
                 ) : (
                   displayedProducts.map((product) => {
                     const isLow = product.stock_qty <= product.min_stock_alert;
@@ -427,6 +395,7 @@ export default function ProductsPage() {
             pageSize={pageSize}
             totalCount={totalCount}
             totalPages={totalPages}
+            loading={loading}
             onPageChange={handlePageChange}
           />
         </div>

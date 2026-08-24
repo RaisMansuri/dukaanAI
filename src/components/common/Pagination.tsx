@@ -6,6 +6,7 @@ interface PaginationProps {
   pageSize: number;
   totalCount: number;
   totalPages: number;
+  loading?: boolean;
   onPageChange: (newPage: number) => void;
 }
 
@@ -14,6 +15,7 @@ export default function Pagination({
   pageSize,
   totalCount,
   totalPages,
+  loading = false,
   onPageChange,
 }: PaginationProps) {
   if (totalCount === 0) return null;
@@ -46,13 +48,14 @@ export default function Pagination({
         Showing <span className="font-bold text-slate-900">{startRecord}</span>–
         <span className="font-bold text-slate-900">{endRecord}</span> of{' '}
         <span className="font-bold text-slate-900">{totalCount}</span> records
+        {loading && <span className="ml-2 inline-block h-2 w-12 rounded-full bg-emerald-400 animate-pulse align-middle" />}
       </div>
 
       <div className="flex items-center gap-1">
         <button
           type="button"
           onClick={() => onPageChange(page - 1)}
-          disabled={page <= 1}
+          disabled={loading || page <= 1}
           className="flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
         >
           <ChevronLeft className="h-4 w-4" />
@@ -70,7 +73,8 @@ export default function Pagination({
                 type="button"
                 key={`page-${p}`}
                 onClick={() => onPageChange(p as number)}
-                className={`min-w-[30px] rounded-lg py-1 text-center font-bold transition-all ${
+                disabled={loading}
+                className={`min-w-[30px] rounded-lg py-1 text-center font-bold transition-all disabled:opacity-50 ${
                   page === p
                     ? 'bg-emerald-600 text-white shadow-sm'
                     : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
@@ -85,7 +89,7 @@ export default function Pagination({
         <button
           type="button"
           onClick={() => onPageChange(page + 1)}
-          disabled={page >= totalPages}
+          disabled={loading || page >= totalPages}
           className="flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
         >
           <span>Next</span>

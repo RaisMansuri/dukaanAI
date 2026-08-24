@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
 import AppLayout from '@/components/layout/AppLayout';
+import { CardSkeleton } from '@/components/common/GridStateComponents';
 import { ApiService } from '@/services/api';
 import { formatRupee, calculateGST, formatDate, generateInvoiceNumber } from '@/lib/utils';
 import { useAuth } from '@/context/AuthContext';
@@ -489,20 +490,7 @@ export default function PosPage() {
           {/* Product Grid */}
           <div className="flex-1 overflow-y-auto pr-1">
             {loadingProducts ? (
-              <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
-                {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
-                  <div key={i} className="h-32 rounded-2xl bg-white p-4 animate-pulse border border-slate-200 flex flex-col justify-between">
-                    <div className="space-y-2">
-                      <div className="h-3 w-16 bg-slate-200 rounded" />
-                      <div className="h-4 w-28 bg-slate-200 rounded" />
-                    </div>
-                    <div className="flex justify-between items-center pt-2 border-t border-slate-100">
-                      <div className="h-4 w-12 bg-slate-200 rounded" />
-                      <div className="h-7 w-7 bg-slate-200 rounded-lg" />
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <CardSkeleton count={8} />
             ) : productsError ? (
               <div className="flex flex-col items-center justify-center h-full min-h-[300px] text-center p-8 bg-amber-50/60 rounded-3xl border border-amber-200">
                 <AlertCircle className="h-10 w-10 text-amber-600 mb-2" />
