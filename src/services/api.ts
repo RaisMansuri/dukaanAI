@@ -11,6 +11,7 @@ import {
   HeldBill,
   PaymentMode,
   StockMovementType,
+  PaginatedResult,
 } from '@/types/database';
 import { generateInvoiceNumber, generateUuid, isValidUuid, calculateGST } from '@/lib/utils';
 import { INITIAL_SHOP, INITIAL_GST_SETTINGS, INITIAL_PRODUCTS } from './mockData';
@@ -463,6 +464,14 @@ export const ApiService = {
         const { data, error } = await query.order('created_at', { ascending: false });
         if (!error && data) {
           const customers = await this.getCustomers();
+          
+          let payments: any[] = [];
+          try {
+            const { data: payData } = await supabase.from('payments').select('*');
+            if (payData) payments = payData;
+          } catch {
+            // Silently handle if payments table is empty or missing columns
+          }
 
           const normalized: Invoice[] = data.map((inv: any) => {
             const cust = customers.find((c) => c.id === inv.customer_id);
@@ -471,6 +480,9 @@ export const ApiService = {
             
             const rawStatus = String(inv.payment_status || 'paid').toUpperCase();
             const paymentMode = inv.payment_mode || (rawStatus === 'UNPAID' ? 'CREDIT' : 'CASH');
+
+            const matchedPayment = payments.find((p) => p.invoice_id === inv.id);
+            const referenceNo = matchedPayment?.reference_number || matchedPayment?.reference_no || '';
 
             const normalizedItems = (inv.items || []).map((it: any) => {
               const qty = Number(it.quantity || 0);
@@ -514,7 +526,7 @@ export const ApiService = {
               payment_status: rawStatus as any,
               payment_mode: paymentMode as any,
               status: String(inv.status || 'COMPLETED').toUpperCase() as any,
-              notes: inv.notes || '',
+              notes: referenceNo ? `Ref: ${referenceNo}` : (inv.notes || ''),
               created_at: inv.created_at || new Date().toISOString(),
               items: normalizedItems,
             };
@@ -527,6 +539,150 @@ export const ApiService = {
       }
     }
     return Storage.getInvoices();
+  },
+
+  async getPaginatedInvoices(options?: {
+    page?: number;
+    pageSize?: number;
+    search?: string;
+    statusFilter?: string;
+    modeFilter?: string;
+    dateFilter?: string;
+    startDate?: string;
+    endDate?: string;
+  }): Promise<PaginatedResult<Invoice>> {
+    const page = Math.max(1, options?.page || 1);
+    const pageSize = Math.max(1, options?.pageSize || 10);
+    const from = (page - 1) * pageSize;
+
+    const allInvoices = await this.getInvoices();
+
+    let filtered = allInvoices.filter((inv) => {
+      const statusUpper = String(inv.payment_status || '').toUpperCase();
+      const modeUpper = String(inv.payment_mode || '').toUpperCase();
+
+      const matchesStatus = !options?.statusFilter || options.statusFilter === 'ALL' || statusUpper === options.statusFilter.toUpperCase();
+      const matchesMode = !options?.modeFilter || options.modeFilter === 'ALL' || modeUpper === options.modeFilter.toUpperCase();
+
+      const search = (options?.search || '').toLowerCase().trim();
+      const matchesSearch =
+        !search ||
+        inv.invoice_number.toLowerCase().includes(search) ||
+        (inv.customer_name && inv.customer_name.toLowerCase().includes(search)) ||
+        (inv.customer_phone && inv.customer_phone.includes(search));
+
+      let matchesDate = true;
+      const invDateStr = inv.created_at ? inv.created_at.slice(0, 10) : '';
+      const todayStr = new Date().toISOString().slice(0, 10);
+
+      if (options?.dateFilter === 'TODAY') {
+        matchesDate = invDateStr === todayStr;
+      } else if (options?.dateFilter === 'THIS_WEEK') {
+        const now = new Date();
+        const weekAgo = new Date(now.setDate(now.getDate() - 7)).toISOString().slice(0, 10);
+        matchesDate = invDateStr >= weekAgo;
+      } else if (options?.dateFilter === 'THIS_MONTH') {
+        const currentMonth = new Date().toISOString().slice(0, 7);
+        matchesDate = invDateStr.startsWith(currentMonth);
+      } else if (options?.dateFilter === 'CUSTOM') {
+        if (options.startDate && invDateStr < options.startDate) matchesDate = false;
+        if (options.endDate && invDateStr > options.endDate) matchesDate = false;
+      }
+
+      return matchesStatus && matchesMode && matchesSearch && matchesDate;
+    });
+
+    const totalCount = filtered.length;
+    const totalPages = Math.ceil(totalCount / pageSize) || 1;
+    const paginatedData = filtered.slice(from, from + pageSize);
+
+    return {
+      data: paginatedData,
+      page,
+      pageSize,
+      totalCount,
+      totalPages,
+    };
+  },
+
+  async getPaginatedProducts(options?: {
+    page?: number;
+    pageSize?: number;
+    search?: string;
+    category?: string;
+  }): Promise<{ data: Product[]; page: number; pageSize: number; totalCount: number; totalPages: number; error: string | null }> {
+    const page = Math.max(1, options?.page || 1);
+    const pageSize = Math.max(1, options?.pageSize || 10);
+    const from = (page - 1) * pageSize;
+
+    const { data: allProds, error } = await this.getProducts();
+    if (error) {
+      return { data: [], page: 1, pageSize, totalCount: 0, totalPages: 1, error };
+    }
+
+    let filtered = allProds;
+    if (options?.category && options.category !== 'ALL') {
+      filtered = filtered.filter((p) => p.category === options.category);
+    }
+
+    if (options?.search) {
+      const search = options.search.toLowerCase().trim();
+      filtered = filtered.filter(
+        (p) =>
+          p.name.toLowerCase().includes(search) ||
+          (p.name_hindi && p.name_hindi.toLowerCase().includes(search)) ||
+          (p.barcode && p.barcode.includes(search)) ||
+          (p.category && p.category.toLowerCase().includes(search))
+      );
+    }
+
+    const totalCount = filtered.length;
+    const totalPages = Math.ceil(totalCount / pageSize) || 1;
+    const paginatedData = filtered.slice(from, from + pageSize);
+
+    return {
+      data: paginatedData,
+      page,
+      pageSize,
+      totalCount,
+      totalPages,
+      error: null,
+    };
+  },
+
+  async getPaginatedCustomers(options?: {
+    page?: number;
+    pageSize?: number;
+    search?: string;
+  }): Promise<PaginatedResult<Customer>> {
+    const page = Math.max(1, options?.page || 1);
+    const pageSize = Math.max(1, options?.pageSize || 10);
+    const from = (page - 1) * pageSize;
+
+    const allCustomers = await this.getCustomers();
+    let filtered = allCustomers;
+
+    if (options?.search) {
+      const search = options.search.toLowerCase().trim();
+      filtered = filtered.filter(
+        (c) =>
+          c.name.toLowerCase().includes(search) ||
+          (c.phone && c.phone.includes(search)) ||
+          (c.email && c.email.toLowerCase().includes(search))
+      );
+    }
+
+    const totalCount = filtered.length;
+    const totalPages = Math.ceil(totalCount / pageSize) || 1;
+    const paginatedData = filtered.slice(from, from + pageSize);
+
+    return {
+      data: paginatedData,
+      page,
+      pageSize,
+      totalCount,
+      totalPages,
+    };
   },
 
   async createInvoice(params: {

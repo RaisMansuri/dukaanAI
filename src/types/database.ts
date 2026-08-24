@@ -131,3 +131,11 @@ export interface HeldBill {
   notes?: string;
   created_at: string;
 }
+
+export interface PaginatedResult<T> {
+  data: T[];
+  page: number;
+  pageSize: number;
+  totalCount: number;
+  totalPages: number;
+}

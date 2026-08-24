@@ -18,10 +18,19 @@ import {
   Sparkles,
   RefreshCw,
 } from 'lucide-react';
+import Pagination from '@/components/common/Pagination';
 import { Product, UnitType } from '@/types/database';
 
 export default function ProductsPage() {
   const [products, setProducts] = useState<Product[]>([]);
+  const [displayedProducts, setDisplayedProducts] = useState<Product[]>([]);
+
+  // Pagination & Filter States
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(10);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [onlyLowStock, setOnlyLowStock] = useState(false);
@@ -39,21 +48,63 @@ export default function ProductsPage() {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // Sync initial page from URL
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlPage = parseInt(urlParams.get('page') || '1', 10);
+      if (urlPage > 0) setPage(urlPage);
+    }
+  }, []);
+
+  const updateUrlPage = (newPage: number) => {
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      url.searchParams.set('page', String(newPage));
+      url.searchParams.set('pageSize', String(pageSize));
+      window.history.replaceState({}, '', url.toString());
+    }
+  };
+
+  const handlePageChange = (newPage: number) => {
+    setPage(newPage);
+    updateUrlPage(newPage);
+  };
+
+  const loadProducts = async () => {
+    setLoading(true);
+    setErrorMsg(null);
+
+    // Fetch all for category counts and low stock lists
+    const { data: allProds, error } = await ApiService.getProducts();
+    if (error) setErrorMsg(error);
+    setProducts(allProds);
+
+    // Fetch paginated
+    const paginatedRes = await ApiService.getPaginatedProducts({
+      page,
+      pageSize,
+      search: searchTerm,
+      category: selectedCategory,
+    });
+
+    let resultData = paginatedRes.data;
+    if (onlyLowStock) {
+      resultData = resultData.filter((p) => p.stock_qty <= p.min_stock_alert);
+    }
+
+    setDisplayedProducts(resultData);
+    setTotalCount(onlyLowStock ? resultData.length : paginatedRes.totalCount);
+    setTotalPages(onlyLowStock ? Math.ceil(resultData.length / pageSize) || 1 : paginatedRes.totalPages);
+    setLoading(false);
+  };
+
   useEffect(() => {
     loadProducts();
     const handleUpdate = () => loadProducts();
     window.addEventListener('dukaan_storage_update', handleUpdate);
     return () => window.removeEventListener('dukaan_storage_update', handleUpdate);
-  }, []);
-
-  const loadProducts = async () => {
-    setLoading(true);
-    setErrorMsg(null);
-    const { data, error } = await ApiService.getProducts();
-    if (error) setErrorMsg(error);
-    setProducts(data);
-    setLoading(false);
-  };
+  }, [page, pageSize, searchTerm, selectedCategory, onlyLowStock]);
 
   const handleSeedProducts = async () => {
     setLoading(true);
@@ -275,14 +326,14 @@ export default function ProductsPage() {
                       </div>
                     </td>
                   </tr>
-                ) : filteredProducts.length === 0 ? (
+                ) : displayedProducts.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="p-8 text-center text-slate-400">
                       No products found matching filters.
                     </td>
                   </tr>
                 ) : (
-                  filteredProducts.map((product) => {
+                  displayedProducts.map((product) => {
                     const isLow = product.stock_qty <= product.min_stock_alert;
                     return (
                       <tr key={product.id} className="hover:bg-slate-50/80 transition-colors">
@@ -318,10 +369,8 @@ export default function ProductsPage() {
                         <td className="p-4 text-center">
                           <div className="flex flex-col items-center">
                             <span
-                              className={`rounded-full px-3 py-1 text-xs font-extrabold ${
-                                isLow
-                                  ? 'bg-amber-100 text-amber-900 border border-amber-300'
-                                  : 'bg-emerald-50 text-emerald-800'
+                              className={`font-black text-sm ${
+                                isLow ? 'text-amber-600' : 'text-slate-900'
                               }`}
                             >
                               {product.stock_qty} {product.unit}
@@ -371,6 +420,15 @@ export default function ProductsPage() {
               </tbody>
             </table>
           </div>
+
+          {/* Reusable Server-Side Pagination Footer */}
+          <Pagination
+            page={page}
+            pageSize={pageSize}
+            totalCount={totalCount}
+            totalPages={totalPages}
+            onPageChange={handlePageChange}
+          />
         </div>
       </div>
 

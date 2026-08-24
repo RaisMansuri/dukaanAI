@@ -17,10 +17,19 @@ import {
   History,
   X,
 } from 'lucide-react';
+import Pagination from '@/components/common/Pagination';
 import { Customer, PaymentMode } from '@/types/database';
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [displayedCustomers, setDisplayedCustomers] = useState<Customer[]>([]);
+
+  // Pagination & Filter States
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(10);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+
   const [searchTerm, setSearchTerm] = useState('');
   const [onlyPendingDue, setOnlyPendingDue] = useState(false);
 
@@ -35,17 +44,55 @@ export default function CustomersPage() {
   const [payRef, setPayRef] = useState('UPI/891829182');
   const [payNotes, setPayNotes] = useState('Udhar cleared by customer');
 
+  // Sync initial page from URL
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlPage = parseInt(urlParams.get('page') || '1', 10);
+      if (urlPage > 0) setPage(urlPage);
+    }
+  }, []);
+
+  const updateUrlPage = (newPage: number) => {
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      url.searchParams.set('page', String(newPage));
+      url.searchParams.set('pageSize', String(pageSize));
+      window.history.replaceState({}, '', url.toString());
+    }
+  };
+
+  const handlePageChange = (newPage: number) => {
+    setPage(newPage);
+    updateUrlPage(newPage);
+  };
+
+  const loadCustomers = async () => {
+    const data = await ApiService.getCustomers();
+    setCustomers(data);
+
+    const paginatedRes = await ApiService.getPaginatedCustomers({
+      page,
+      pageSize,
+      search: searchTerm,
+    });
+
+    let resultData = paginatedRes.data;
+    if (onlyPendingDue) {
+      resultData = resultData.filter((c) => c.total_due > 0);
+    }
+
+    setDisplayedCustomers(resultData);
+    setTotalCount(onlyPendingDue ? resultData.length : paginatedRes.totalCount);
+    setTotalPages(onlyPendingDue ? Math.ceil(resultData.length / pageSize) || 1 : paginatedRes.totalPages);
+  };
+
   useEffect(() => {
     loadCustomers();
     const handleUpdate = () => loadCustomers();
     window.addEventListener('dukaan_storage_update', handleUpdate);
     return () => window.removeEventListener('dukaan_storage_update', handleUpdate);
-  }, []);
-
-  const loadCustomers = async () => {
-    const data = await ApiService.getCustomers();
-    setCustomers(data);
-  };
+  }, [page, pageSize, searchTerm, onlyPendingDue]);
 
   const handleSaveCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -182,7 +229,7 @@ export default function CustomersPage() {
                     </td>
                   </tr>
                 ) : (
-                  filteredCustomers.map((cust) => {
+                  displayedCustomers.map((cust) => {
                     const hasDue = cust.total_due > 0;
                     return (
                       <tr key={cust.id} className="hover:bg-slate-50/80 transition-colors">
@@ -253,6 +300,15 @@ export default function CustomersPage() {
               </tbody>
             </table>
           </div>
+
+          {/* Reusable Server-Side Pagination Footer */}
+          <Pagination
+            page={page}
+            pageSize={pageSize}
+            totalCount={totalCount}
+            totalPages={totalPages}
+            onPageChange={handlePageChange}
+          />
         </div>
       </div>
 
