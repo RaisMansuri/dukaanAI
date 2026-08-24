@@ -381,6 +381,19 @@ export const ApiService = {
       }
     }
 
+    if (isSupabaseConfigured() && customerData.phone) {
+      const { data: existing } = await supabase
+        .from('customers')
+        .select('*')
+        .eq('shop_id', shop.id)
+        .eq('phone', customerData.phone)
+        .maybeSingle();
+
+      if (existing) {
+        return existing as Customer;
+      }
+    }
+
     const newCustomer: Customer = {
       id: generateUuid(),
       shop_id: shop.id,

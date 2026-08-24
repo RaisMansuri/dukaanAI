@@ -44,9 +44,13 @@ export default function PosPage() {
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [barcodeInput, setBarcodeInput] = useState('');
 
-  // Cart State
+  // Cart & Customer State
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
+  const [customerPhone, setCustomerPhone] = useState<string>('');
+  const [customerName, setCustomerName] = useState<string>('');
+  const [isExistingCustomer, setIsExistingCustomer] = useState(false);
+  const [isNewCustomer, setIsNewCustomer] = useState(false);
   const [globalDiscount, setGlobalDiscount] = useState<number>(0);
   const [paymentMode, setPaymentMode] = useState<PaymentMode>('UPI');
   const [notes, setNotes] = useState('');
@@ -244,6 +248,56 @@ export default function PosPage() {
     }
   };
 
+  // Customer Search & Selection Handlers
+  const handlePhoneChange = (val: string) => {
+    const raw = val.replace(/\D/g, '').slice(0, 10);
+    setCustomerPhone(raw);
+
+    if (raw.length === 10) {
+      const matched = customers.find(
+        (c) => c.phone && (c.phone.endsWith(raw) || c.phone.replace(/\D/g, '').endsWith(raw))
+      );
+      if (matched) {
+        setSelectedCustomerId(matched.id);
+        setCustomerName(matched.name);
+        setIsExistingCustomer(true);
+        setIsNewCustomer(false);
+      } else {
+        setSelectedCustomerId('');
+        setIsExistingCustomer(false);
+        setIsNewCustomer(true);
+      }
+    } else {
+      if (isExistingCustomer) {
+        setSelectedCustomerId('');
+        setCustomerName('');
+        setIsExistingCustomer(false);
+        setIsNewCustomer(false);
+      } else {
+        setIsNewCustomer(false);
+      }
+    }
+  };
+
+  const handleSelectCustomerDropdown = (id: string) => {
+    setSelectedCustomerId(id);
+    if (!id) {
+      setCustomerPhone('');
+      setCustomerName('');
+      setIsExistingCustomer(false);
+      setIsNewCustomer(false);
+      return;
+    }
+    const cust = customers.find((c) => c.id === id);
+    if (cust) {
+      const cleanPhone = cust.phone ? cust.phone.replace(/\D/g, '').slice(-10) : '';
+      setCustomerPhone(cleanPhone);
+      setCustomerName(cust.name);
+      setIsExistingCustomer(true);
+      setIsNewCustomer(false);
+    }
+  };
+
   // Complete Sale Logic
   const handleCompleteSale = async () => {
     if (cart.length === 0) {
@@ -251,9 +305,13 @@ export default function PosPage() {
       return;
     }
 
-    if (paymentMode === 'CREDIT' && !selectedCustomerId) {
-      alert('Please select a customer for Credit (Udhar) sale!');
-      return;
+    // Udhar (Credit) Payment Validation: Mobile number is MANDATORY!
+    if (paymentMode === 'CREDIT') {
+      const cleanPhone = customerPhone.replace(/\D/g, '');
+      if (!selectedCustomerId && cleanPhone.length < 10) {
+        alert('Mobile number is required for Udhar customers.');
+        return;
+      }
     }
 
     if (paymentMode === 'UPI' && !showUpiModal) {
@@ -274,10 +332,33 @@ export default function PosPage() {
   const executeSale = async (referenceNo?: string) => {
     setLoading(true);
     try {
+      let activeCustomerId = selectedCustomerId || null;
+      let activeCustomerName = customerName.trim() || selectedCustomer?.name || 'Walk-in Customer';
+      let activeCustomerPhone = customerPhone.trim();
+
+      // If a 10-digit mobile number was entered for a new customer, save customer first
+      if (!activeCustomerId && activeCustomerPhone.replace(/\D/g, '').length === 10) {
+        try {
+          const newCust = await ApiService.saveCustomer({
+            name: customerName.trim() || `Customer ${activeCustomerPhone}`,
+            phone: activeCustomerPhone,
+            credit_limit: 5000,
+          });
+          activeCustomerId = newCust.id;
+          activeCustomerName = newCust.name;
+
+          // Refresh customers list
+          const freshCusts = await ApiService.getCustomers();
+          setCustomers(freshCusts);
+        } catch (err: any) {
+          console.warn('[Auto Save Customer Exception]', err);
+        }
+      }
+
       const inv = await ApiService.createInvoice({
-        customerId: selectedCustomerId || null,
-        customerName: selectedCustomer?.name,
-        customerPhone: selectedCustomer?.phone,
+        customerId: activeCustomerId,
+        customerName: activeCustomerName,
+        customerPhone: activeCustomerPhone,
         items: cart,
         discountAmount: globalDiscount,
         paymentMode,
@@ -289,6 +370,10 @@ export default function PosPage() {
       setCart([]);
       setGlobalDiscount(0);
       setSelectedCustomerId('');
+      setCustomerPhone('');
+      setCustomerName('');
+      setIsExistingCustomer(false);
+      setIsNewCustomer(false);
       setNotes('');
       setShowUpiModal(false);
       setShowCardModal(false);
@@ -298,6 +383,7 @@ export default function PosPage() {
       alert('Failed to complete sale: ' + (e.message || 'Unknown database error'));
     } finally {
       setLoading(false);
+      setIsProcessingUpi(false);
       setIsProcessingCard(false);
     }
   };
@@ -550,23 +636,72 @@ export default function PosPage() {
             </button>
           </div>
 
-          {/* Customer Selection Dropdown */}
-          <div className="space-y-1">
-            <label className="block text-xs font-semibold text-slate-700 flex items-center gap-1">
-              <Users className="h-3.5 w-3.5 text-slate-400" /> Customer Account
-            </label>
-            <select
-              value={selectedCustomerId}
-              onChange={(e) => setSelectedCustomerId(e.target.value)}
-              className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-800 focus:border-emerald-500 focus:outline-none"
-            >
-              <option value="">Walk-in Customer (Cash Sale)</option>
-              {customers.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} ({c.phone}) - Due: ₹{c.total_due}
-                </option>
-              ))}
-            </select>
+          {/* Customer Selection & Mobile Number Section */}
+          <div className="space-y-2 border-b pb-3">
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-semibold text-slate-700 flex items-center gap-1">
+                  <Users className="h-3.5 w-3.5 text-slate-400" /> Customer Account
+                </label>
+                {isExistingCustomer && (
+                  <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                    ✓ Found
+                  </span>
+                )}
+                {isNewCustomer && (
+                  <span className="text-[10px] font-extrabold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
+                    + New Customer
+                  </span>
+                )}
+              </div>
+
+              <select
+                value={selectedCustomerId}
+                onChange={(e) => handleSelectCustomerDropdown(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-800 focus:border-emerald-500 focus:outline-none"
+              >
+                <option value="">Walk-in Customer (Cash Sale)</option>
+                {customers.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} ({c.phone}) - Due: ₹{c.total_due}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Mobile Number & Customer Name Inputs */}
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <label className="block text-[11px] font-semibold text-slate-600">Mobile Number</label>
+                <div className="relative flex items-center">
+                  <span className="absolute left-2.5 text-xs font-bold text-slate-400">+91</span>
+                  <input
+                    type="tel"
+                    maxLength={10}
+                    placeholder="10 digit mobile"
+                    value={customerPhone}
+                    onChange={(e) => handlePhoneChange(e.target.value)}
+                    className="w-full rounded-xl border border-slate-300 py-1.5 pl-9 pr-2 text-xs font-mono font-medium focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-[11px] font-semibold text-slate-600">Customer Name</label>
+                <input
+                  type="text"
+                  placeholder="Enter customer name"
+                  value={customerName}
+                  onChange={(e) => setCustomerName(e.target.value)}
+                  readOnly={isExistingCustomer}
+                  className={`w-full rounded-xl border py-1.5 px-2.5 text-xs font-medium focus:outline-none ${
+                    isExistingCustomer
+                      ? 'bg-slate-100 border-slate-200 text-slate-700 cursor-not-allowed'
+                      : 'border-slate-300 focus:border-emerald-500 bg-white'
+                  }`}
+                />
+              </div>
+            </div>
 
             {selectedCustomer && selectedCustomer.total_due > 0 && (
               <div className="flex items-center justify-between rounded-lg bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-800 border border-amber-200">
