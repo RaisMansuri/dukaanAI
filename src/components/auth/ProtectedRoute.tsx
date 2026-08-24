@@ -3,8 +3,6 @@
 import React, { useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
-import { Sparkles } from 'lucide-react';
-import { isSupabaseConfigured } from '@/lib/supabase/client';
 
 const PUBLIC_PATHS = ['/auth/login', '/auth/signup'];
 
@@ -13,36 +11,36 @@ export default function ProtectedRoute({ children }: { children: React.ReactNode
   const router = useRouter();
   const pathname = usePathname();
 
+  const isPublicPath = PUBLIC_PATHS.includes(pathname);
+
   useEffect(() => {
     if (loading) return;
 
-    if (isSupabaseConfigured()) {
-      const isPublicPath = PUBLIC_PATHS.includes(pathname);
-
-      if (!user && !isPublicPath) {
-        router.push('/auth/login');
-        return;
-      }
-
-      if (user) {
-        if (isPublicPath) {
-          if (!shop) {
-            router.push('/setup');
-          } else {
-            router.push('/dashboard');
-          }
-          return;
-        }
-
-        if (!shop && pathname !== '/setup') {
-          router.push('/setup');
-          return;
-        }
-      }
+    // Unauthenticated users attempting to access protected routes
+    if (!user && !isPublicPath) {
+      router.replace('/auth/login');
+      return;
     }
-  }, [user, shop, loading, pathname, router]);
 
-  if (loading && isSupabaseConfigured()) {
+    // Authenticated users attempting to access public auth pages
+    if (user && isPublicPath) {
+      if (!shop) {
+        router.replace('/setup');
+      } else {
+        router.replace('/dashboard');
+      }
+      return;
+    }
+
+    // Authenticated user with no shop attempting to access dashboard before setup
+    if (user && !shop && pathname !== '/setup' && !isPublicPath) {
+      router.replace('/setup');
+      return;
+    }
+  }, [user, shop, loading, pathname, isPublicPath, router]);
+
+  // Display Skeleton loading screen while checking session or performing auth redirects
+  if (loading || (!user && !isPublicPath) || (user && isPublicPath)) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white p-4">
         <div className="w-full max-w-sm rounded-3xl bg-slate-800 p-8 border border-slate-700 shadow-2xl space-y-4 animate-pulse">

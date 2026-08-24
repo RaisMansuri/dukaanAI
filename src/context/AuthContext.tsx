@@ -60,22 +60,21 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     setLoading(true);
     if (isSupabaseConfigured()) {
       try {
-        const { data: { user: currentUser } } = await supabase.auth.getUser();
-        if (currentUser) {
-          setUser(currentUser);
-          await loadUserContext(currentUser);
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user) {
+          setUser(session.user);
+          await loadUserContext(session.user);
         } else {
           setUser(null);
           setLoading(false);
         }
       } catch (err) {
         console.error('[AuthContext Init Error]', err);
+        setUser(null);
         setLoading(false);
       }
     } else {
-      // Mock fallback if Supabase env not set
-      setShop(Storage.getShop());
-      setGstSettings(Storage.getGstSettings());
+      setUser(null);
       setLoading(false);
     }
   };
