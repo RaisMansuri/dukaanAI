@@ -2,9 +2,16 @@ import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase/client';
 
 export async function GET(request: Request) {
-  const { searchParams, origin } = new URL(request.url);
-  const code = searchParams.get('code');
-  const next = searchParams.get('next') ?? '/dashboard';
+  const requestUrl = new URL(request.url);
+  const code = requestUrl.searchParams.get('code');
+  const next = requestUrl.searchParams.get('next') ?? '/dashboard';
+
+  // Determine origin safely across localhost, Vercel previews, and production domains
+  const forwardedHost = request.headers.get('x-forwarded-host');
+  const host = forwardedHost || request.headers.get('host') || requestUrl.host;
+  const forwardedProto = request.headers.get('x-forwarded-proto');
+  const protocol = forwardedProto || (requestUrl.protocol.startsWith('https') ? 'https' : 'http');
+  const origin = `${protocol}://${host}`;
 
   if (code) {
     try {
