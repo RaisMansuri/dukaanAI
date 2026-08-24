@@ -9,7 +9,7 @@ import { useAuth } from '@/context/AuthContext';
 
 export default function LoginPage() {
   const router = useRouter();
-  const { user, shop, loading: authLoading } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -17,18 +17,17 @@ export default function LoginPage() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [infoMsg, setInfoMsg] = useState<string | null>(null);
 
-  // If user is already authenticated, redirect to dashboard or setup
+  // Automatically redirect authenticated user to Dashboard once AuthContext loads
   useEffect(() => {
     if (!authLoading && user) {
-      if (shop) {
-        router.replace('/dashboard');
-      } else {
-        router.replace('/setup');
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[Login Directing Authenticated User]:', user.email);
       }
+      router.replace('/dashboard');
     }
-  }, [user, shop, authLoading, router]);
+  }, [user, authLoading, router]);
 
-  // Check URL params for error messages from callback
+  // Check URL query params for error or confirmation notices
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const urlParams = new URLSearchParams(window.location.search);
@@ -57,11 +56,13 @@ export default function LoginPage() {
 
     setLoading(true);
 
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[Sign In Triggered]:', cleanEmail);
+    }
+
     if (!isSupabaseConfigured()) {
-      setTimeout(() => {
-        setLoading(false);
-        router.push('/dashboard');
-      }, 500);
+      setErrorMsg('Supabase environment variables are missing or invalid.');
+      setLoading(false);
       return;
     }
 
@@ -72,7 +73,7 @@ export default function LoginPage() {
       });
 
       if (error) {
-        console.warn('[Sign In Auth Warning]', error.message);
+        console.warn('[Sign In Response Error]', error.message);
         const lowerErr = error.message.toLowerCase();
         if (lowerErr.includes('invalid login credentials')) {
           setErrorMsg('Invalid email address or password. Please check your credentials.');
@@ -85,25 +86,15 @@ export default function LoginPage() {
         return;
       }
 
-      if (data.user) {
-        // Check if user has a shop
-        const { data: shopData } = await supabase
-          .from('shops')
-          .select('id')
-          .eq('owner_id', data.user.id)
-          .limit(1)
-          .maybeSingle();
-
-        if (shopData) {
-          router.push('/dashboard');
-        } else {
-          router.push('/setup');
+      if (data.session && data.user) {
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[Sign In Success Session Established]:', data.user.email);
         }
+        // AuthContext automatically receives session via onAuthStateChange and redirects to /dashboard
       }
     } catch (err: any) {
-      console.error('[Sign In Error]', err);
+      console.error('[Sign In Exception]', err);
       setErrorMsg(err?.message || 'Failed to sign in. Please check your connection.');
-    } finally {
       setLoading(false);
     }
   };
@@ -189,10 +180,10 @@ export default function LoginPage() {
 
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || authLoading}
               className="w-full h-[48px] flex items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-bold text-white shadow-lg hover:bg-emerald-500 active:scale-95 transition-all disabled:opacity-50 touch-manipulation"
             >
-              {loading ? 'Signing In...' : 'Sign In'} <ArrowRight className="h-4 w-4" />
+              {loading || authLoading ? 'Signing In...' : 'Sign In'} <ArrowRight className="h-4 w-4" />
             </button>
           </form>
 

@@ -38,7 +38,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
     if (isSupabaseConfigured()) {
       const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[AuthStateChange Event]:', event, session?.user?.email || 'No Session User');
+        }
+
         if (session?.user) {
+          setLoading(true);
           setUser(session.user);
           await loadUserContext(session.user);
         } else {
@@ -130,13 +135,25 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
         if (gstData) {
           setGstSettings(gstData as GstSettings);
+        } else {
+          setGstSettings(Storage.getGstSettings());
         }
       } else {
-        setShop(null);
-        setGstSettings(null);
+        // Fallback Shop for authenticated users
+        const fallbackShop = Storage.getShop();
+        const userShop: Shop = {
+          ...fallbackShop,
+          owner_id: currentUser.id,
+        };
+        setShop(userShop);
+        setGstSettings(Storage.getGstSettings());
       }
     } catch (err) {
       console.error('[AuthContext loadUserContext Error]', err);
+      // Ensure user has valid fallback shop on exception
+      const fallbackShop = Storage.getShop();
+      setShop({ ...fallbackShop, owner_id: currentUser.id });
+      setGstSettings(Storage.getGstSettings());
     } finally {
       setLoading(false);
     }

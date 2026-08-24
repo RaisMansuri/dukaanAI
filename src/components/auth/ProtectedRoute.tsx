@@ -7,7 +7,7 @@ import { useAuth } from '@/context/AuthContext';
 const PUBLIC_PATHS = ['/auth/login', '/auth/signup'];
 
 export default function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { user, shop, loading } = useAuth();
+  const { user, loading } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -22,22 +22,12 @@ export default function ProtectedRoute({ children }: { children: React.ReactNode
       return;
     }
 
-    // Authenticated users attempting to access public auth pages
+    // Authenticated users attempting to access public auth pages (/auth/login, /auth/signup)
     if (user && isPublicPath) {
-      if (!shop) {
-        router.replace('/setup');
-      } else {
-        router.replace('/dashboard');
-      }
+      router.replace('/dashboard');
       return;
     }
-
-    // Authenticated user with no shop attempting to access dashboard before setup
-    if (user && !shop && pathname !== '/setup' && !isPublicPath) {
-      router.replace('/setup');
-      return;
-    }
-  }, [user, shop, loading, pathname, isPublicPath, router]);
+  }, [user, loading, pathname, isPublicPath, router]);
 
   // Display Skeleton loading screen while checking session or performing auth redirects
   if (loading || (!user && !isPublicPath) || (user && isPublicPath)) {

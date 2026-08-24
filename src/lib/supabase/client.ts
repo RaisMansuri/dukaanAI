@@ -5,20 +5,25 @@ const getEnvVar = (key: string): string => {
   return val.replace(/^["']|["']$/g, '').trim();
 };
 
-const rawUrl = getEnvVar('NEXT_PUBLIC_SUPABASE_URL');
-const rawKey = getEnvVar('NEXT_PUBLIC_SUPABASE_ANON_KEY');
+// Official DukaanAI Supabase Project Credentials
+const REAL_SUPABASE_URL = 'https://muozewnqikscwtfnilpn.supabase.co';
+const REAL_SUPABASE_ANON_KEY = 'sb_publishable_Xs3Un2JkOV2EUbEVGJ1_Xg_f2SYO_ix';
 
-const supabaseUrl = rawUrl || 'https://placeholder.supabase.co';
-const supabaseAnonKey = rawKey || 'placeholder-key';
+const envUrl = getEnvVar('NEXT_PUBLIC_SUPABASE_URL');
+const envKey = getEnvVar('NEXT_PUBLIC_SUPABASE_ANON_KEY');
+
+const supabaseUrl = envUrl || REAL_SUPABASE_URL;
+const supabaseAnonKey = envKey || REAL_SUPABASE_ANON_KEY;
 
 export const isSupabaseConfigured = (): boolean => {
-  return (
-    !!rawUrl &&
-    !!rawKey &&
-    rawUrl !== 'https://placeholder.supabase.co' &&
-    !rawUrl.includes('placeholder')
-  );
+  return !!supabaseUrl && !!supabaseAnonKey;
 };
+
+if (!envUrl || !envKey) {
+  console.warn('[Supabase Client] Environment variables missing in process.env. Using official project credentials.');
+} else if (process.env.NODE_ENV === 'development') {
+  console.log('[Supabase Client] Configured and connected to:', supabaseUrl);
+}
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
@@ -28,12 +33,3 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     storageKey: 'dukaanai-auth-token',
   },
 });
-
-// Development-only structured debug logging
-if (process.env.NODE_ENV === 'development') {
-  if (isSupabaseConfigured()) {
-    console.log('[Supabase Client] Configured and connected to:', supabaseUrl);
-  } else {
-    console.warn('[Supabase Client] Not configured or using placeholder credentials.');
-  }
-}

@@ -38,10 +38,8 @@ export default function ShopSetupPage() {
     setLoading(true);
 
     if (!isSupabaseConfigured()) {
-      setTimeout(() => {
-        setLoading(false);
-        router.push('/dashboard');
-      }, 500);
+      setErrorMsg('Supabase environment variables are missing or invalid.');
+      setLoading(false);
       return;
     }
 

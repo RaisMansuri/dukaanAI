@@ -73,10 +73,8 @@ export default function SignUpPage() {
     const fullMobile = `+91${mobileNumber}`;
 
     if (!isSupabaseConfigured()) {
-      setTimeout(() => {
-        setLoading(false);
-        router.push('/setup');
-      }, 500);
+      setErrorMsg('Supabase environment variables are missing or invalid.');
+      setLoading(false);
       return;
     }
 
