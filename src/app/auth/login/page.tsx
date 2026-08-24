@@ -1,26 +1,63 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Store, Eye, EyeOff, ArrowRight, Sparkles, AlertCircle } from 'lucide-react';
+import { Store, Eye, EyeOff, ArrowRight, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase/client';
+import { useAuth } from '@/context/AuthContext';
 
 export default function LoginPage() {
   const router = useRouter();
+  const { user, shop, loading: authLoading } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [infoMsg, setInfoMsg] = useState<string | null>(null);
+
+  // If user is already authenticated, redirect to dashboard or setup
+  useEffect(() => {
+    if (!authLoading && user) {
+      if (shop) {
+        router.replace('/dashboard');
+      } else {
+        router.replace('/setup');
+      }
+    }
+  }, [user, shop, authLoading, router]);
+
+  // Check URL params for error messages from callback
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlError = urlParams.get('error');
+      const urlMsg = urlParams.get('message');
+      if (urlError) setErrorMsg(urlError);
+      if (urlMsg) setInfoMsg(urlMsg);
+    }
+  }, []);
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
+    setInfoMsg(null);
+
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      setErrorMsg('Email Address is required.');
+      return;
+    }
+
+    if (!password) {
+      setErrorMsg('Password is required.');
+      return;
+    }
+
     setLoading(true);
 
     if (!isSupabaseConfigured()) {
-      // Mock mode fallback
       setTimeout(() => {
         setLoading(false);
         router.push('/dashboard');
@@ -30,12 +67,20 @@ export default function LoginPage() {
 
     try {
       const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
+        email: cleanEmail,
         password,
       });
 
       if (error) {
-        setErrorMsg(error.message);
+        console.warn('[Sign In Auth Warning]', error.message);
+        const lowerErr = error.message.toLowerCase();
+        if (lowerErr.includes('invalid login credentials')) {
+          setErrorMsg('Invalid email address or password. Please check your credentials.');
+        } else if (lowerErr.includes('email not confirmed')) {
+          setErrorMsg('Your email address has not been verified yet. Please check your inbox for the confirmation link.');
+        } else {
+          setErrorMsg(error.message);
+        }
         setLoading(false);
         return;
       }
@@ -57,24 +102,19 @@ export default function LoginPage() {
       }
     } catch (err: any) {
       console.error('[Sign In Error]', err);
-      setErrorMsg(err?.message || 'Failed to sign in. Please try again.');
+      setErrorMsg(err?.message || 'Failed to sign in. Please check your connection.');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleDemoLogin = () => {
-    setEmail('demo.owner@dukaanai.com');
-    setPassword('DemoPassword123!');
-  };
-
   return (
-    <div className="min-h-screen bg-slate-950 text-white flex flex-col justify-center items-center p-4 relative overflow-hidden">
-      {/* Background Glow */}
+    <div className="min-h-[100dvh] w-full bg-slate-950 text-white flex flex-col justify-center items-center py-8 px-4 relative overflow-y-auto">
+      {/* Background Ambient Glow */}
       <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-emerald-600/20 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute bottom-10 right-10 w-72 h-72 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
 
-      <div className="w-full max-w-md space-y-6 relative z-10">
+      <div className="w-full max-w-md space-y-6 relative z-10 my-auto">
         {/* Brand Header */}
         <div className="text-center space-y-2">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-400 text-white shadow-xl shadow-emerald-500/20">
@@ -92,13 +132,20 @@ export default function LoginPage() {
         <div className="rounded-3xl border border-slate-800 bg-slate-900/90 p-6 sm:p-8 backdrop-blur-xl shadow-2xl space-y-6">
           <div className="space-y-1">
             <h2 className="text-xl font-bold text-slate-100">Sign In to Your Shop</h2>
-            <p className="text-xs text-slate-400">Enter your business email and password</p>
+            <p className="text-xs text-slate-400">Enter your registered email and password</p>
           </div>
 
           {errorMsg && (
-            <div className="flex items-center gap-2 rounded-xl bg-red-500/10 border border-red-500/30 p-3 text-xs font-semibold text-red-400">
-              <AlertCircle className="h-4 w-4 shrink-0" />
+            <div className="flex items-start gap-2.5 rounded-xl bg-red-500/10 border border-red-500/30 p-3.5 text-xs font-semibold text-red-400">
+              <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
               <span>{errorMsg}</span>
+            </div>
+          )}
+
+          {infoMsg && (
+            <div className="flex items-start gap-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 p-3.5 text-xs font-semibold text-emerald-400">
+              <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5" />
+              <span>{infoMsg}</span>
             </div>
           )}
 
@@ -113,7 +160,7 @@ export default function LoginPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="owner@dukaanai.com"
-                className="w-full rounded-xl border border-slate-700 bg-slate-950 py-3 px-4 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                className="w-full h-[46px] rounded-xl border border-slate-700 bg-slate-950 py-3 px-4 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
               />
             </div>
 
@@ -128,12 +175,12 @@ export default function LoginPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full rounded-xl border border-slate-700 bg-slate-950 py-3 pl-4 pr-10 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  className="w-full h-[46px] rounded-xl border border-slate-700 bg-slate-950 py-3 pl-4 pr-10 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 text-slate-400 hover:text-white"
+                  className="absolute right-3 p-1 text-slate-400 hover:text-white"
                 >
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
@@ -143,13 +190,13 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-bold text-white shadow-lg hover:bg-emerald-500 active:scale-95 transition-all disabled:opacity-50"
+              className="w-full h-[48px] flex items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-bold text-white shadow-lg hover:bg-emerald-500 active:scale-95 transition-all disabled:opacity-50 touch-manipulation"
             >
               {loading ? 'Signing In...' : 'Sign In'} <ArrowRight className="h-4 w-4" />
             </button>
           </form>
 
-          <div className="text-center pt-2">
+          <div className="text-center pt-2 border-t border-slate-800/80">
             <p className="text-xs text-slate-400">
               Don&apos;t have an account?{' '}
               <Link href="/auth/signup" className="font-bold text-emerald-400 hover:text-emerald-300 underline">

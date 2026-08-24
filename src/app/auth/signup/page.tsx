@@ -1,13 +1,15 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Store, Eye, EyeOff, ArrowRight, CheckCircle2, AlertCircle } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase/client';
+import { useAuth } from '@/context/AuthContext';
 
 export default function SignUpPage() {
   const router = useRouter();
+  const { user, shop, loading: authLoading } = useAuth();
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [mobileNumber, setMobileNumber] = useState('');
@@ -17,6 +19,17 @@ export default function SignUpPage() {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  // If user is already authenticated, redirect to dashboard or setup
+  useEffect(() => {
+    if (!authLoading && user) {
+      if (shop) {
+        router.replace('/dashboard');
+      } else {
+        router.replace('/setup');
+      }
+    }
+  }, [user, shop, authLoading, router]);
 
   const handleMobileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const digits = e.target.value.replace(/\D/g, '').slice(0, 10);
@@ -28,12 +41,15 @@ export default function SignUpPage() {
     setErrorMsg(null);
     setSuccessMsg(null);
 
-    if (!fullName.trim()) {
+    const cleanName = fullName.trim();
+    const cleanEmail = email.trim();
+
+    if (!cleanName) {
       setErrorMsg('Full Name is required.');
       return;
     }
 
-    if (!email.trim()) {
+    if (!cleanEmail) {
       setErrorMsg('Email Address is required.');
       return;
     }
@@ -78,29 +94,40 @@ export default function SignUpPage() {
         return;
       }
 
-      // 1. Create Auth User
+      // Configure email verification callback redirect URL
+      const origin = typeof window !== 'undefined' ? window.location.origin : '';
+      const callbackUrl = `${origin}/auth/callback`;
+
+      // 1. Create Auth User in Supabase
       const { data, error } = await supabase.auth.signUp({
-        email: email.trim(),
+        email: cleanEmail,
         password,
         options: {
+          emailRedirectTo: callbackUrl,
           data: {
-            full_name: fullName.trim(),
+            full_name: cleanName,
             mobile_number: fullMobile,
           },
         },
       });
 
       if (error) {
-        setErrorMsg(error.message);
+        console.warn('[Sign Up Auth Warning]', error.message);
+        const lowerErr = error.message.toLowerCase();
+        if (lowerErr.includes('already registered') || lowerErr.includes('already exists')) {
+          setErrorMsg('An account with this email address already exists. Please Sign In.');
+        } else {
+          setErrorMsg(error.message);
+        }
         setLoading(false);
         return;
       }
 
       if (data.user) {
-        // 2. Insert Profile record in public.profiles
+        // 2. Insert Profile record in public.profiles table
         const { error: profileErr } = await supabase.from('profiles').insert({
           id: data.user.id,
-          full_name: fullName.trim(),
+          full_name: cleanName,
           mobile_number: fullMobile,
         });
 
@@ -108,11 +135,15 @@ export default function SignUpPage() {
           console.warn('[Profile Insert Note]', profileErr.message);
         }
 
-        setSuccessMsg('Account created successfully! Redirecting to Shop Setup...');
-
-        setTimeout(() => {
-          router.push('/setup');
-        }, 1000);
+        // Check if email confirmation is required by Supabase auth configuration
+        if (data.session) {
+          setSuccessMsg('Account created successfully! Redirecting to Shop Setup...');
+          setTimeout(() => {
+            router.push('/setup');
+          }, 1000);
+        } else {
+          setSuccessMsg('Account created successfully! Please check your email to verify your account before signing in.');
+        }
       }
     } catch (err: any) {
       console.error('[Sign Up Error]', err);
@@ -123,12 +154,12 @@ export default function SignUpPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-white flex flex-col justify-center items-center p-4 relative overflow-hidden">
-      {/* Background Glow */}
+    <div className="min-h-[100dvh] w-full bg-slate-950 text-white flex flex-col justify-center items-center py-8 px-4 relative overflow-y-auto">
+      {/* Background Ambient Glow */}
       <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-emerald-600/20 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute bottom-10 right-10 w-72 h-72 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
 
-      <div className="w-full max-w-md space-y-6 relative z-10">
+      <div className="w-full max-w-md space-y-6 relative z-10 my-auto">
         {/* Brand Header */}
         <div className="text-center space-y-2">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-400 text-white shadow-xl shadow-emerald-500/20">
@@ -150,15 +181,15 @@ export default function SignUpPage() {
           </div>
 
           {errorMsg && (
-            <div className="flex items-center gap-2 rounded-xl bg-red-500/10 border border-red-500/30 p-3 text-xs font-semibold text-red-400">
-              <AlertCircle className="h-4 w-4 shrink-0" />
+            <div className="flex items-start gap-2.5 rounded-xl bg-red-500/10 border border-red-500/30 p-3.5 text-xs font-semibold text-red-400">
+              <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
               <span>{errorMsg}</span>
             </div>
           )}
 
           {successMsg && (
-            <div className="flex items-center gap-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 p-3 text-xs font-semibold text-emerald-400">
-              <CheckCircle2 className="h-4 w-4 shrink-0" />
+            <div className="flex items-start gap-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 p-3.5 text-xs font-semibold text-emerald-400 leading-relaxed">
+              <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5" />
               <span>{successMsg}</span>
             </div>
           )}
@@ -175,7 +206,7 @@ export default function SignUpPage() {
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
                 placeholder="Rais Mansuri"
-                className="w-full rounded-xl border border-slate-700 bg-slate-950 py-3 px-4 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                className="w-full h-[46px] rounded-xl border border-slate-700 bg-slate-950 py-3 px-4 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
               />
             </div>
 
@@ -190,7 +221,7 @@ export default function SignUpPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="owner@dukaanai.com"
-                className="w-full rounded-xl border border-slate-700 bg-slate-950 py-3 px-4 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                className="w-full h-[46px] rounded-xl border border-slate-700 bg-slate-950 py-3 px-4 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
               />
             </div>
 
@@ -228,12 +259,12 @@ export default function SignUpPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full rounded-xl border border-slate-700 bg-slate-950 py-3 pl-4 pr-10 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  className="w-full h-[46px] rounded-xl border border-slate-700 bg-slate-950 py-3 pl-4 pr-10 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 text-slate-400 hover:text-white"
+                  className="absolute right-3 p-1 text-slate-400 hover:text-white"
                 >
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
@@ -251,7 +282,7 @@ export default function SignUpPage() {
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 placeholder="••••••••"
-                className="w-full rounded-xl border border-slate-700 bg-slate-950 py-3 px-4 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                className="w-full h-[46px] rounded-xl border border-slate-700 bg-slate-950 py-3 px-4 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
               />
             </div>
 
@@ -259,13 +290,13 @@ export default function SignUpPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-bold text-white shadow-lg hover:bg-emerald-500 active:scale-95 transition-all disabled:opacity-50"
+              className="w-full h-[48px] flex items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-bold text-white shadow-lg hover:bg-emerald-500 active:scale-95 transition-all disabled:opacity-50 touch-manipulation"
             >
               {loading ? 'Creating Account...' : 'Create Account'} <ArrowRight className="h-4 w-4" />
             </button>
           </form>
 
-          <div className="text-center pt-2">
+          <div className="text-center pt-2 border-t border-slate-800/80">
             <p className="text-xs text-slate-400">
               Already have an account?{' '}
               <Link href="/auth/login" className="font-bold text-emerald-400 hover:text-emerald-300 underline">
