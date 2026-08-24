@@ -3,38 +3,69 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Store, Phone, ShieldCheck, Sparkles, ArrowRight, CheckCircle2 } from 'lucide-react';
+import { Store, Eye, EyeOff, ArrowRight, Sparkles, AlertCircle } from 'lucide-react';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase/client';
 
 export default function LoginPage() {
   const router = useRouter();
-  const [phone, setPhone] = useState('9820012345');
-  const [otp, setOtp] = useState('');
-  const [step, setStep] = useState<'PHONE' | 'OTP'>('PHONE');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const handleSendOtp = (e: React.FormEvent) => {
+  const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
+    setErrorMsg(null);
     setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
-      setStep('OTP');
-    }, 600);
-  };
 
-  const handleVerifyOtp = (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setTimeout(() => {
+    if (!isSupabaseConfigured()) {
+      // Mock mode fallback
+      setTimeout(() => {
+        setLoading(false);
+        router.push('/dashboard');
+      }, 500);
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+
+      if (error) {
+        setErrorMsg(error.message);
+        setLoading(false);
+        return;
+      }
+
+      if (data.user) {
+        // Check if user has a shop
+        const { data: shopData } = await supabase
+          .from('shops')
+          .select('id')
+          .eq('owner_id', data.user.id)
+          .limit(1)
+          .maybeSingle();
+
+        if (shopData) {
+          router.push('/dashboard');
+        } else {
+          router.push('/setup');
+        }
+      }
+    } catch (err: any) {
+      console.error('[Sign In Error]', err);
+      setErrorMsg(err?.message || 'Failed to sign in. Please try again.');
+    } finally {
       setLoading(false);
-      router.push('/dashboard');
-    }, 600);
+    }
   };
 
   const handleDemoLogin = () => {
-    setLoading(true);
-    setTimeout(() => {
-      router.push('/dashboard');
-    }, 400);
+    setEmail('demo.owner@dukaanai.com');
+    setPassword('DemoPassword123!');
   };
 
   return (
@@ -60,106 +91,71 @@ export default function LoginPage() {
         {/* Login Form Card */}
         <div className="rounded-3xl border border-slate-800 bg-slate-900/90 p-6 sm:p-8 backdrop-blur-xl shadow-2xl space-y-6">
           <div className="space-y-1">
-            <h2 className="text-xl font-bold text-slate-100">Welcome Back</h2>
-            <p className="text-xs text-slate-400">Sign in using your mobile number</p>
+            <h2 className="text-xl font-bold text-slate-100">Sign In to Your Shop</h2>
+            <p className="text-xs text-slate-400">Enter your business email and password</p>
           </div>
 
-          {step === 'PHONE' ? (
-            <form onSubmit={handleSendOtp} className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Mobile Number (Phone)
-                </label>
-                <div className="relative flex items-center">
-                  <span className="absolute left-3 text-sm font-semibold text-slate-400">
-                    +91
-                  </span>
-                  <input
-                    type="tel"
-                    required
-                    maxLength={10}
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    placeholder="9876543210"
-                    className="w-full rounded-xl border border-slate-700 bg-slate-950 py-3 pl-12 pr-4 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                  />
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-bold text-white shadow-lg hover:bg-emerald-500 active:scale-95 transition-all disabled:opacity-50"
-              >
-                {loading ? 'Sending OTP...' : 'Get OTP'} <ArrowRight className="h-4 w-4" />
-              </button>
-            </form>
-          ) : (
-            <form onSubmit={handleVerifyOtp} className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Enter 4-Digit OTP sent to +91 {phone}
-                </label>
-                <input
-                  type="text"
-                  required
-                  maxLength={4}
-                  value={otp}
-                  onChange={(e) => setOtp(e.target.value)}
-                  placeholder="1 2 3 4"
-                  className="w-full rounded-xl border border-slate-700 bg-slate-950 py-3 px-4 text-center text-lg tracking-widest text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-bold text-white shadow-lg hover:bg-emerald-500 active:scale-95 transition-all"
-              >
-                {loading ? 'Verifying...' : 'Verify & Enter Shop'}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setStep('PHONE')}
-                className="w-full text-center text-xs text-slate-400 hover:text-white"
-              >
-                Change Phone Number
-              </button>
-            </form>
+          {errorMsg && (
+            <div className="flex items-center gap-2 rounded-xl bg-red-500/10 border border-red-500/30 p-3 text-xs font-semibold text-red-400">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              <span>{errorMsg}</span>
+            </div>
           )}
 
-          <div className="relative flex items-center justify-center">
-            <div className="absolute inset-0 border-t border-slate-800" />
-            <span className="relative bg-slate-900 px-3 text-xs font-medium text-slate-500">
-              OR TEST INSTANTLY
-            </span>
-          </div>
+          <form onSubmit={handleSignIn} className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                Email Address *
+              </label>
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="owner@dukaanai.com"
+                className="w-full rounded-xl border border-slate-700 bg-slate-950 py-3 px-4 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              />
+            </div>
 
-          <button
-            type="button"
-            onClick={handleDemoLogin}
-            disabled={loading}
-            className="w-full flex items-center justify-center gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 py-3 text-sm font-bold text-amber-400 hover:bg-amber-500/20 active:scale-95 transition-all"
-          >
-            <Sparkles className="h-4 w-4" />
-            <span>Login as Demo Shop Owner</span>
-          </button>
-        </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                Password *
+              </label>
+              <div className="relative flex items-center">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 py-3 pl-4 pr-10 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 text-slate-400 hover:text-white"
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
 
-        {/* Value Highlights */}
-        <div className="grid grid-cols-3 gap-2 text-center text-[11px] text-slate-400">
-          <div className="flex flex-col items-center gap-1">
-            <ShieldCheck className="h-4 w-4 text-emerald-400" />
-            <span>GST Tax Ready</span>
-          </div>
-          <div className="flex flex-col items-center gap-1">
-            <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-            <span>Udhar Credit Tracker</span>
-          </div>
-          <div className="flex flex-col items-center gap-1">
-            <Sparkles className="h-4 w-4 text-amber-400" />
-            <span>UPI QR Payments</span>
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-bold text-white shadow-lg hover:bg-emerald-500 active:scale-95 transition-all disabled:opacity-50"
+            >
+              {loading ? 'Signing In...' : 'Sign In'} <ArrowRight className="h-4 w-4" />
+            </button>
+          </form>
+
+          <div className="text-center pt-2">
+            <p className="text-xs text-slate-400">
+              Don&apos;t have an account?{' '}
+              <Link href="/auth/signup" className="font-bold text-emerald-400 hover:text-emerald-300 underline">
+                Create Account
+              </Link>
+            </p>
           </div>
         </div>
       </div>

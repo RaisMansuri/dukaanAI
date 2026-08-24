@@ -1,178 +1,255 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import AppLayout from '@/components/layout/AppLayout';
-import { ApiService } from '@/services/api';
-import { Store, ShieldCheck, CheckCircle, Save } from 'lucide-react';
-import { Shop, GstSettings } from '@/types/database';
+import { useAuth } from '@/context/AuthContext';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase/client';
+import { Store, ShieldCheck, CheckCircle2, Save, AlertCircle } from 'lucide-react';
+import { generateUuid } from '@/lib/utils';
 
 export default function ShopSetupPage() {
   const router = useRouter();
-  const [shop, setShop] = useState<Shop | null>(null);
-  const [gst, setGst] = useState<GstSettings | null>(null);
+  const { user, refreshShop } = useAuth();
+
+  const [shopName, setShopName] = useState('Shree Ganesh Super Market');
+  const [ownerName, setOwnerName] = useState(user?.user_metadata?.full_name || 'Rais Mansuri');
+  const [phone, setPhone] = useState('+91 98200 12345');
+  const [businessType, setBusinessType] = useState('Kirana / Retail General Store');
+  const [address, setAddress] = useState('Shop No. 12, Main Market Road, Andheri West');
+  const [stateCode, setStateCode] = useState('27 (Maharashtra)');
+  const [pincode, setPincode] = useState('400058');
+  const [gstNumber, setGstNumber] = useState('27AAACG1234F1Z5');
+  const [defaultGstRate, setDefaultGstRate] = useState(18);
+  const [isGstEnabled, setIsGstEnabled] = useState(true);
+
   const [loading, setLoading] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  const loadData = async () => {
-    const s = await ApiService.getShop();
-    const g = await ApiService.getGstSettings();
-    setShop(s);
-    setGst(g);
-  };
-
-  const handleSave = async (e: React.FormEvent) => {
+  const handleCreateShop = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!shop || !gst) return;
-    setLoading(true);
-    await ApiService.updateShop(shop);
-    await ApiService.updateGstSettings(gst);
-    setLoading(false);
-    setSaved(true);
-    setTimeout(() => {
-      setSaved(false);
-      router.push('/dashboard');
-    }, 800);
-  };
+    setErrorMsg(null);
 
-  if (!shop || !gst) {
-    return (
-      <AppLayout>
-        <div className="flex h-64 items-center justify-center">
-          <div className="text-slate-500 font-medium">Loading Shop Config...</div>
-        </div>
-      </AppLayout>
-    );
-  }
+    if (!shopName.trim()) {
+      setErrorMsg('Shop Name is required.');
+      return;
+    }
+
+    setLoading(true);
+
+    if (!isSupabaseConfigured()) {
+      setTimeout(() => {
+        setLoading(false);
+        router.push('/dashboard');
+      }, 500);
+      return;
+    }
+
+    try {
+      // 1. Get current authenticated user
+      const { data: { user: currentUser } } = await supabase.auth.getUser();
+
+      if (!currentUser) {
+        setErrorMsg('You must be signed in to create a shop.');
+        setLoading(false);
+        return;
+      }
+
+      const shopId = generateUuid();
+      const fullAddress = `${address.trim()}${pincode ? ', PIN: ' + pincode : ''}`;
+
+      // 2. Insert into public.shops with owner_id = currentUser.id
+      const { error: shopErr } = await supabase.from('shops').insert({
+        id: shopId,
+        owner_id: currentUser.id,
+        shop_name: shopName.trim(),
+        address: fullAddress,
+        phone: phone.trim(),
+      });
+
+      if (shopErr) {
+        console.error('[Shop Creation Error]', shopErr);
+        setErrorMsg(`[${shopErr.code}] ${shopErr.message}`);
+        setLoading(false);
+        return;
+      }
+
+      // 3. Insert into public.gst_settings
+      const { error: gstErr } = await supabase.from('gst_settings').insert({
+        id: generateUuid(),
+        shop_id: shopId,
+        is_gst_enabled: isGstEnabled,
+        default_gst_rate: Number(defaultGstRate),
+      });
+
+      if (gstErr) {
+        console.warn('[GST Settings Insert Note]', gstErr.message);
+      }
+
+      // 4. Refresh auth context and redirect to dashboard
+      await refreshShop();
+      router.push('/dashboard');
+    } catch (err: any) {
+      console.error('[Shop Setup Exception]', err);
+      setErrorMsg(err?.message || 'Failed to setup shop. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <AppLayout>
       <div className="max-w-3xl mx-auto space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between border-b border-slate-200 pb-4">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Shop Setup & Profile</h1>
-            <p className="text-sm text-slate-500">Configure business info, GSTIN, and tax rules</p>
+            <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">Shop Onboarding & Setup</h1>
+            <p className="text-sm text-slate-500">Configure your business profile, tax settings, and store details</p>
           </div>
-          <div className="flex items-center gap-2 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">
-            <Store className="h-4 w-4" /> Active Shop
+          <div className="flex items-center gap-2 rounded-full bg-emerald-100 px-3.5 py-1 text-xs font-extrabold text-emerald-800 border border-emerald-300">
+            <Store className="h-4 w-4" /> Setup Wizard
           </div>
         </div>
 
-        {saved && (
-          <div className="flex items-center gap-2 rounded-xl bg-emerald-600 p-4 text-sm font-semibold text-white shadow-lg animate-fade-in">
-            <CheckCircle className="h-5 w-5" />
-            <span>Shop setup saved successfully! Redirecting to Dashboard...</span>
+        {errorMsg && (
+          <div className="flex items-center gap-2 rounded-xl bg-red-50 border border-red-200 p-4 text-xs font-bold text-red-800">
+            <AlertCircle className="h-5 w-5 text-red-600 shrink-0" />
+            <span>{errorMsg}</span>
           </div>
         )}
 
-        <form onSubmit={handleSave} className="space-y-6">
-          {/* Shop Details Card */}
+        <form onSubmit={handleCreateShop} className="space-y-6">
+          {/* Business Details Card */}
           <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
-            <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-              <Store className="h-5 w-5 text-emerald-600" /> Business Details
+            <h2 className="text-base font-bold text-slate-900 flex items-center gap-2 border-b pb-3">
+              <Store className="h-5 w-5 text-emerald-600" /> Business Profile
             </h2>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Shop Name *
-                </label>
+                <label className="block font-semibold text-slate-700 mb-1">Shop / Business Name *</label>
                 <input
                   type="text"
                   required
-                  value={shop.name}
-                  onChange={(e) => setShop({ ...shop, name: e.target.value })}
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  value={shopName}
+                  onChange={(e) => setShopName(e.target.value)}
+                  placeholder="Shree Ganesh Super Market"
+                  className="w-full rounded-xl border border-slate-300 p-2.5 text-xs font-bold text-slate-900 focus:border-emerald-500 focus:outline-none"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Phone Number *
-                </label>
+                <label className="block font-semibold text-slate-700 mb-1">Owner Name *</label>
                 <input
                   type="text"
                   required
-                  value={shop.phone}
-                  onChange={(e) => setShop({ ...shop, phone: e.target.value })}
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  value={ownerName}
+                  onChange={(e) => setOwnerName(e.target.value)}
+                  placeholder="Rais Mansuri"
+                  className="w-full rounded-xl border border-slate-300 p-2.5 text-xs focus:border-emerald-500 focus:outline-none"
                 />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Contact Phone *</label>
+                <input
+                  type="text"
+                  required
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="+91 98200 12345"
+                  className="w-full rounded-xl border border-slate-300 p-2.5 text-xs focus:border-emerald-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Business Category / Type</label>
+                <select
+                  value={businessType}
+                  onChange={(e) => setBusinessType(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 p-2.5 text-xs bg-white focus:border-emerald-500 focus:outline-none"
+                >
+                  <option value="Kirana / Retail General Store">Kirana / Retail General Store</option>
+                  <option value="Apparel & Clothing">Apparel & Clothing</option>
+                  <option value="Electronics & Mobile">Electronics & Mobile</option>
+                  <option value="Supermarket / Grocery">Supermarket / Grocery</option>
+                  <option value="Pharmacy / Medical">Pharmacy / Medical</option>
+                </select>
               </div>
 
               <div className="md:col-span-2">
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Shop Address & Area *
-                </label>
+                <label className="block font-semibold text-slate-700 mb-1">Store Address & Area *</label>
                 <textarea
                   rows={2}
                   required
-                  value={shop.address}
-                  onChange={(e) => setShop({ ...shop, address: e.target.value })}
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  value={address}
+                  onChange={(e) => setAddress(e.target.value)}
+                  placeholder="Shop No. 12, Main Market Road, Andheri West"
+                  className="w-full rounded-xl border border-slate-300 p-2.5 text-xs focus:border-emerald-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">State / Code</label>
+                <input
+                  type="text"
+                  value={stateCode}
+                  onChange={(e) => setStateCode(e.target.value)}
+                  placeholder="27 (Maharashtra)"
+                  className="w-full rounded-xl border border-slate-300 p-2.5 text-xs focus:border-emerald-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Pincode</label>
+                <input
+                  type="text"
+                  value={pincode}
+                  onChange={(e) => setPincode(e.target.value)}
+                  placeholder="400058"
+                  className="w-full rounded-xl border border-slate-300 p-2.5 text-xs focus:border-emerald-500 focus:outline-none"
                 />
               </div>
             </div>
           </div>
 
-          {/* GST Configuration Card */}
+          {/* Tax & GST Settings Card */}
           <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
-            <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-              <ShieldCheck className="h-5 w-5 text-emerald-600" /> GST Tax Settings
+            <h2 className="text-base font-bold text-slate-900 flex items-center gap-2 border-b pb-3">
+              <ShieldCheck className="h-5 w-5 text-emerald-600" /> GST Billing Settings
             </h2>
 
             <div className="flex items-center justify-between rounded-xl bg-slate-50 p-4 border border-slate-200">
               <div>
-                <div className="font-semibold text-sm text-slate-900">Enable GST Billing</div>
-                <div className="text-xs text-slate-500">Calculate CGST/SGST on POS bills</div>
+                <div className="font-semibold text-xs text-slate-900">Enable GST Calculation</div>
+                <div className="text-[11px] text-slate-500">Automatically compute tax breakdown on POS sales</div>
               </div>
               <input
                 type="checkbox"
-                checked={gst.is_gst_enabled}
-                onChange={(e) => setGst({ ...gst, is_gst_enabled: e.target.checked })}
+                checked={isGstEnabled}
+                onChange={(e) => setIsGstEnabled(e.target.checked)}
                 className="h-5 w-5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
               />
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  GSTIN Number (15 Digits)
-                </label>
+                <label className="block font-semibold text-slate-700 mb-1">GSTIN Number (Optional)</label>
                 <input
                   type="text"
+                  value={gstNumber}
+                  onChange={(e) => setGstNumber(e.target.value)}
                   placeholder="27AAACG1234F1Z5"
-                  value={shop.gst_number}
-                  onChange={(e) => setShop({ ...shop, gst_number: e.target.value })}
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm uppercase focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  className="w-full rounded-xl border border-slate-300 p-2.5 text-xs uppercase focus:border-emerald-500 focus:outline-none"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  State Code & Name
-                </label>
-                <input
-                  type="text"
-                  placeholder="27 (Maharashtra)"
-                  value={shop.state_code}
-                  onChange={(e) => setShop({ ...shop, state_code: e.target.value })}
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Default GST Rate (%)
-                </label>
+                <label className="block font-semibold text-slate-700 mb-1">Default GST Rate (%)</label>
                 <select
-                  value={gst.default_gst_rate}
-                  onChange={(e) => setGst({ ...gst, default_gst_rate: Number(e.target.value) })}
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 bg-white"
+                  value={defaultGstRate}
+                  onChange={(e) => setDefaultGstRate(Number(e.target.value))}
+                  className="w-full rounded-xl border border-slate-300 p-2.5 text-xs bg-white focus:border-emerald-500 focus:outline-none"
                 >
                   <option value={0}>0% (Exempted)</option>
                   <option value={5}>5% (Groceries/Food)</option>
@@ -181,34 +258,21 @@ export default function ShopSetupPage() {
                   <option value={28}>28% (Luxury/Aerated)</option>
                 </select>
               </div>
-
-              <div className="flex items-center gap-2 pt-6">
-                <input
-                  type="checkbox"
-                  id="comp"
-                  checked={gst.composite_scheme}
-                  onChange={(e) => setGst({ ...gst, composite_scheme: e.target.checked })}
-                  className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                />
-                <label htmlFor="comp" className="text-xs font-medium text-slate-700">
-                  Composition Scheme (1% flat)
-                </label>
-              </div>
             </div>
           </div>
 
-          <div className="flex justify-end gap-3">
+          <div className="flex justify-end">
             <button
               type="submit"
               disabled={loading}
-              className="flex items-center gap-2 rounded-xl bg-emerald-600 px-6 py-3 text-sm font-bold text-white shadow-md hover:bg-emerald-700 active:scale-95 transition-all"
+              className="flex items-center gap-2 rounded-xl bg-emerald-600 px-6 py-3 text-sm font-bold text-white shadow-md hover:bg-emerald-700 active:scale-95 transition-all disabled:opacity-50"
             >
               <Save className="h-4 w-4" />
-              {loading ? 'Saving Setup...' : 'Save & Continue'}
+              {loading ? 'Creating Shop...' : 'Save & Launch Shop'}
             </button>
           </div>
         </form>
-      </div >
+      </div>
     </AppLayout>
   );
 }

@@ -15,38 +15,46 @@ import {
 import { generateInvoiceNumber, generateUuid, isValidUuid } from '@/lib/utils';
 import { INITIAL_SHOP, INITIAL_GST_SETTINGS, INITIAL_PRODUCTS } from './mockData';
 
-const DEFAULT_SHOP_ID = 'a1b2c3d4-e5f6-47a8-b901-c2d3e4f5a6b7';
-
 export const ApiService = {
-  // --- SHOP & GST ---
-  async getShop(): Promise<Shop> {
+  // --- AUTHENTICATED SHOP RESOLUTION ---
+  async getAuthenticatedShop(): Promise<Shop> {
     if (isSupabaseConfigured()) {
       try {
-        const { data, error } = await supabase.from('shops').select('*').limit(1).maybeSingle();
-        if (!error && data && isValidUuid(data.id)) return data as Shop;
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          const { data: shopData } = await supabase
+            .from('shops')
+            .select('*')
+            .eq('owner_id', user.id)
+            .limit(1)
+            .maybeSingle();
 
-        if (!data) {
-          const newShop: Shop = {
-            ...INITIAL_SHOP,
-            id: DEFAULT_SHOP_ID,
-          };
-          const { error: insertErr } = await supabase.from('shops').insert({
-            id: newShop.id,
-            shop_name: newShop.name,
-            address: newShop.address,
-            phone: newShop.phone,
-          });
-          if (!insertErr) return newShop;
+          if (shopData) {
+            return {
+              id: shopData.id,
+              owner_id: shopData.owner_id,
+              name: shopData.name || shopData.shop_name || 'My Shop',
+              address: shopData.address || '',
+              phone: shopData.phone || '',
+              gst_number: shopData.gst_number || shopData.gstin || '',
+              state_code: shopData.state_code || '',
+              created_at: shopData.created_at,
+            };
+          }
         }
       } catch (err) {
-        console.warn('[Supabase Shop Fetch Exception]', err);
+        console.warn('[Supabase getAuthenticatedShop Exception]', err);
       }
     }
-    return { ...Storage.getShop(), id: DEFAULT_SHOP_ID };
+    return Storage.getShop();
+  },
+
+  async getShop(): Promise<Shop> {
+    return this.getAuthenticatedShop();
   },
 
   async updateShop(shop: Partial<Shop>): Promise<Shop> {
-    const current = await this.getShop();
+    const current = await this.getAuthenticatedShop();
     const updated = { ...current, ...shop };
     if (isSupabaseConfigured() && isValidUuid(current.id)) {
       await supabase.from('shops').update({
@@ -62,13 +70,23 @@ export const ApiService = {
   async getGstSettings(): Promise<GstSettings> {
     if (isSupabaseConfigured()) {
       try {
-        const { data, error } = await supabase.from('gst_settings').select('*').limit(1).maybeSingle();
+        const shop = await this.getAuthenticatedShop();
+        const { data, error } = await supabase
+          .from('gst_settings')
+          .select('*')
+          .eq('shop_id', shop.id)
+          .maybeSingle();
+
         if (!error && data) return data as GstSettings;
 
-        if (!data) {
-          const shop = await this.getShop();
+        if (!data && shop) {
           const defaultGst = { ...INITIAL_GST_SETTINGS, id: generateUuid(), shop_id: shop.id };
-          await supabase.from('gst_settings').insert(defaultGst);
+          await supabase.from('gst_settings').insert({
+            id: defaultGst.id,
+            shop_id: defaultGst.shop_id,
+            is_gst_enabled: defaultGst.is_gst_enabled,
+            default_gst_rate: defaultGst.default_gst_rate,
+          });
           return defaultGst;
         }
       } catch (err) {
@@ -82,7 +100,10 @@ export const ApiService = {
     const current = await this.getGstSettings();
     const updated = { ...current, ...gst };
     if (isSupabaseConfigured()) {
-      await supabase.from('gst_settings').update(gst).eq('id', current.id);
+      await supabase.from('gst_settings').update({
+        is_gst_enabled: updated.is_gst_enabled,
+        default_gst_rate: updated.default_gst_rate,
+      }).eq('shop_id', current.shop_id);
     }
     Storage.setGstSettings(updated);
     return updated;
@@ -92,9 +113,9 @@ export const ApiService = {
   async getProducts(): Promise<{ data: Product[]; error: string | null }> {
     if (isSupabaseConfigured()) {
       try {
-        const shop = await this.getShop();
+        const shop = await this.getAuthenticatedShop();
+        
         let query = supabase.from('products').select('*');
-
         if (shop && isValidUuid(shop.id)) {
           query = query.eq('shop_id', shop.id);
         }
@@ -139,9 +160,12 @@ export const ApiService = {
   },
 
   async saveProduct(productData: Omit<Product, 'id' | 'shop_id' | 'created_at'> & { id?: string }): Promise<Product> {
-    const shop = await this.getShop();
+    const shop = await this.getAuthenticatedShop();
 
-    // Map application fields strictly to existing Supabase columns
+    if (!shop || !isValidUuid(shop.id)) {
+      throw new Error('No valid shop registered for your account. Please complete Shop Setup.');
+    }
+
     const supabasePayload: Record<string, any> = {
       shop_id: shop.id,
       name: productData.name,
@@ -156,7 +180,7 @@ export const ApiService = {
 
     if (productData.id && isValidUuid(productData.id)) {
       if (isSupabaseConfigured()) {
-        const { error } = await supabase.from('products').update(supabasePayload).eq('id', productData.id);
+        const { error } = await supabase.from('products').update(supabasePayload).eq('id', productData.id).eq('shop_id', shop.id);
         if (error) {
           console.error('[Supabase updateProduct Error]', error);
           if (error.code === '42501') {
@@ -220,7 +244,8 @@ export const ApiService = {
 
   async deleteProduct(id: string): Promise<boolean> {
     if (isSupabaseConfigured() && isValidUuid(id)) {
-      const { error } = await supabase.from('products').delete().eq('id', id);
+      const shop = await this.getAuthenticatedShop();
+      const { error } = await supabase.from('products').delete().eq('id', id).eq('shop_id', shop.id);
       if (error) {
         console.error('[Supabase deleteProduct Error]', error);
         throw new Error(`[${error.code}] ${error.message}`);
@@ -231,7 +256,7 @@ export const ApiService = {
 
   async seedProductsToSupabase(): Promise<number> {
     if (!isSupabaseConfigured()) return 0;
-    const shop = await this.getShop();
+    const shop = await this.getAuthenticatedShop();
     const productsToInsert = INITIAL_PRODUCTS.map((p) => ({
       id: generateUuid(),
       shop_id: shop.id,
@@ -288,7 +313,7 @@ export const ApiService = {
   async getCustomers(): Promise<Customer[]> {
     if (isSupabaseConfigured()) {
       try {
-        const shop = await this.getShop();
+        const shop = await this.getAuthenticatedShop();
         let query = supabase.from('customers').select('*');
         if (shop && isValidUuid(shop.id)) {
           query = query.eq('shop_id', shop.id);
@@ -303,7 +328,7 @@ export const ApiService = {
   },
 
   async saveCustomer(customerData: Omit<Customer, 'id' | 'shop_id' | 'total_due' | 'created_at'> & { id?: string }): Promise<Customer> {
-    const shop = await this.getShop();
+    const shop = await this.getAuthenticatedShop();
     const customers = await this.getCustomers();
 
     if (customerData.id && isValidUuid(customerData.id)) {
@@ -315,7 +340,11 @@ export const ApiService = {
         };
         customers[index] = updated;
         if (isSupabaseConfigured()) {
-          await supabase.from('customers').update(updated).eq('id', updated.id);
+          await supabase.from('customers').update({
+            name: customerData.name,
+            phone: customerData.phone,
+            address: customerData.address || '',
+          }).eq('id', customerData.id).eq('shop_id', shop.id);
         }
         return updated;
       }
@@ -334,7 +363,13 @@ export const ApiService = {
     };
 
     if (isSupabaseConfigured()) {
-      await supabase.from('customers').insert(newCustomer);
+      await supabase.from('customers').insert({
+        id: newCustomer.id,
+        shop_id: shop.id,
+        name: newCustomer.name,
+        phone: newCustomer.phone,
+        address: newCustomer.address,
+      });
     }
     return newCustomer;
   },
@@ -364,7 +399,11 @@ export const ApiService = {
 
     if (isSupabaseConfigured() && isValidUuid(customerId)) {
       await supabase.from('customers').update({ total_due: customer.total_due }).eq('id', customerId);
-      await supabase.from('payments').insert(payment);
+      await supabase.from('payments').insert({
+        id: payment.id,
+        customer_id: customerId,
+        amount: payment.amount,
+      });
     }
   },
 
@@ -372,7 +411,7 @@ export const ApiService = {
   async getInvoices(): Promise<Invoice[]> {
     if (isSupabaseConfigured()) {
       try {
-        const shop = await this.getShop();
+        const shop = await this.getAuthenticatedShop();
         let query = supabase.from('invoices').select('*, items:invoice_items(*)');
         if (shop && isValidUuid(shop.id)) {
           query = query.eq('shop_id', shop.id);
@@ -399,7 +438,7 @@ export const ApiService = {
     paymentMode: PaymentMode;
     notes?: string;
   }): Promise<Invoice> {
-    const shop = await this.getShop();
+    const shop = await this.getAuthenticatedShop();
     const { data: products } = await this.getProducts();
     const customers = await this.getCustomers();
 
@@ -409,7 +448,7 @@ export const ApiService = {
     const invoiceId = generateUuid();
     const invoiceNumber = generateInvoiceNumber('INV');
 
-    const invoiceItems = params.items.map((item, idx) => {
+    const invoiceItems = params.items.map((item) => {
       const lineSubtotal = item.product.price * item.quantity - item.discount;
       const basePrice = lineSubtotal / (1 + item.product.gst_rate / 100);
       const gstAmt = lineSubtotal - basePrice;
@@ -474,17 +513,11 @@ export const ApiService = {
         id: newInvoice.id,
         shop_id: newInvoice.shop_id,
         customer_id: newInvoice.customer_id,
-        customer_name: newInvoice.customer_name,
-        customer_phone: newInvoice.customer_phone,
         invoice_number: newInvoice.invoice_number,
         subtotal: newInvoice.subtotal,
         discount_amount: newInvoice.discount_amount,
-        gst_amount: newInvoice.gst_amount,
         total_amount: newInvoice.total_amount,
-        paid_amount: newInvoice.paid_amount,
-        due_amount: newInvoice.due_amount,
         payment_status: newInvoice.payment_status,
-        payment_mode: newInvoice.payment_mode,
         status: newInvoice.status,
         notes: newInvoice.notes,
         created_at: newInvoice.created_at,
@@ -492,7 +525,16 @@ export const ApiService = {
       if (invErr) console.error('[Supabase Invoice Insert Error]', invErr);
 
       if (newInvoice.items && newInvoice.items.length > 0) {
-        const { error: itemErr } = await supabase.from('invoice_items').insert(newInvoice.items);
+        const insertItemsPayload = newInvoice.items.map((it) => ({
+          id: it.id,
+          invoice_id: it.invoice_id,
+          product_id: it.product_id,
+          product_name: it.product_name,
+          quantity: it.quantity,
+          unit_price: it.unit_price,
+          gst_rate: it.gst_rate,
+        }));
+        const { error: itemErr } = await supabase.from('invoice_items').insert(insertItemsPayload);
         if (itemErr) console.error('[Supabase Invoice Items Insert Error]', itemErr);
       }
     }
