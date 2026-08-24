@@ -35,8 +35,12 @@ export default function InvoicesPage() {
     setInvoices(data);
   };
 
+  const paidCount = invoices.filter((inv) => String(inv.payment_status || '').toUpperCase() === 'PAID').length;
+  const unpaidCount = invoices.filter((inv) => String(inv.payment_status || '').toUpperCase() === 'UNPAID').length;
+
   const filteredInvoices = invoices.filter((inv) => {
-    const matchesStatus = statusFilter === 'ALL' || inv.payment_status === statusFilter;
+    const statusUpper = String(inv.payment_status || '').toUpperCase();
+    const matchesStatus = statusFilter === 'ALL' || statusUpper === statusFilter;
     const matchesSearch =
       inv.invoice_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
       (inv.customer_name && inv.customer_name.toLowerCase().includes(searchTerm.toLowerCase())) ||
@@ -69,7 +73,7 @@ export default function InvoicesPage() {
             />
           </div>
 
-          {/* Status Filter */}
+          {/* Status Filter Buttons */}
           <div className="flex items-center gap-2">
             <button
               onClick={() => setStatusFilter('ALL')}
@@ -89,7 +93,7 @@ export default function InvoicesPage() {
                   : 'bg-slate-50 text-slate-700 border border-slate-200 hover:bg-slate-100'
               }`}
             >
-              Paid Only
+              Paid Only ({paidCount})
             </button>
             <button
               onClick={() => setStatusFilter('UNPAID')}
@@ -99,7 +103,7 @@ export default function InvoicesPage() {
                   : 'bg-slate-50 text-slate-700 border border-slate-200 hover:bg-slate-100'
               }`}
             >
-              Udhar / Unpaid
+              Udhar / Unpaid ({unpaidCount})
             </button>
           </div>
         </div>
@@ -122,67 +126,72 @@ export default function InvoicesPage() {
               <tbody className="divide-y divide-slate-100 text-xs text-slate-800">
                 {filteredInvoices.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="p-8 text-center text-slate-400">
-                      No invoices found matching criteria.
+                    <td colSpan={7} className="p-8 text-center text-slate-400 font-semibold">
+                      No invoices found matching &quot;{statusFilter}&quot; filter.
                     </td>
                   </tr>
                 ) : (
-                  filteredInvoices.map((inv) => (
-                    <tr key={inv.id} className="hover:bg-slate-50/80 transition-colors">
-                      <td className="p-4 font-mono font-bold text-slate-900">
-                        {inv.invoice_number}
-                      </td>
+                  filteredInvoices.map((inv) => {
+                    const isPaid = String(inv.payment_status || '').toUpperCase() === 'PAID';
+                    const modeDisplay = inv.payment_mode || (isPaid ? 'CASH' : 'CREDIT');
 
-                      <td className="p-4">
-                        <div className="font-bold text-slate-900">
-                          {inv.customer_name || 'Walk-in Customer'}
-                        </div>
-                        {inv.customer_phone && (
-                          <div className="text-[10px] text-slate-400">{inv.customer_phone}</div>
-                        )}
-                      </td>
+                    return (
+                      <tr key={inv.id} className="hover:bg-slate-50/80 transition-colors">
+                        <td className="p-4 font-mono font-bold text-slate-900">
+                          {inv.invoice_number}
+                        </td>
 
-                      <td className="p-4 text-slate-600 font-medium">
-                        {formatDate(inv.created_at)}
-                      </td>
-
-                      <td className="p-4 text-center font-semibold">
-                        <span className="rounded-md bg-slate-100 px-2 py-0.5 text-slate-700">
-                          {inv.payment_mode}
-                        </span>
-                      </td>
-
-                      <td className="p-4 text-right font-black text-sm text-slate-900">
-                        {formatRupee(inv.total_amount)}
-                        {inv.due_amount > 0 && (
-                          <div className="text-[10px] font-bold text-amber-600">
-                            Due: {formatRupee(inv.due_amount)}
+                        <td className="p-4">
+                          <div className="font-bold text-slate-900">
+                            {inv.customer_name || 'Walk-in Customer'}
                           </div>
-                        )}
-                      </td>
+                          {inv.customer_phone && (
+                            <div className="text-[10px] text-slate-400">{inv.customer_phone}</div>
+                          )}
+                        </td>
 
-                      <td className="p-4 text-center">
-                        <span
-                          className={`rounded-full px-2.5 py-1 text-[11px] font-extrabold ${
-                            inv.payment_status === 'PAID'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-amber-100 text-amber-900'
-                          }`}
-                        >
-                          {inv.payment_status}
-                        </span>
-                      </td>
+                        <td className="p-4 text-slate-600 font-medium">
+                          {formatDate(inv.created_at)}
+                        </td>
 
-                      <td className="p-4 text-right">
-                        <button
-                          onClick={() => setSelectedInvoice(inv)}
-                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-100"
-                        >
-                          <Eye className="h-3.5 w-3.5 text-slate-500" /> View & Print
-                        </button>
-                      </td>
-                    </tr>
-                  ))
+                        <td className="p-4 text-center font-semibold">
+                          <span className="rounded-md bg-slate-100 px-2.5 py-1 text-slate-800 font-bold text-[11px] border border-slate-200">
+                            {modeDisplay}
+                          </span>
+                        </td>
+
+                        <td className="p-4 text-right font-black text-sm text-slate-900">
+                          {formatRupee(inv.total_amount)}
+                          {inv.due_amount > 0 && (
+                            <div className="text-[10px] font-bold text-amber-600">
+                              Due: {formatRupee(inv.due_amount)}
+                            </div>
+                          )}
+                        </td>
+
+                        <td className="p-4 text-center">
+                          <span
+                            className={`rounded-full px-2.5 py-1 text-[11px] font-extrabold ${
+                              isPaid
+                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                : 'bg-amber-100 text-amber-900 border border-amber-200'
+                            }`}
+                          >
+                            {String(inv.payment_status || 'PAID').toLowerCase()}
+                          </span>
+                        </td>
+
+                        <td className="p-4 text-right">
+                          <button
+                            onClick={() => setSelectedInvoice(inv)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-100"
+                          >
+                            <Eye className="h-3.5 w-3.5 text-slate-500" /> View & Print
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -214,11 +223,11 @@ export default function InvoicesPage() {
               <div className="flex justify-between border-b pb-2 text-[11px]">
                 <div>
                   <div><span className="font-bold">Invoice #:</span> {selectedInvoice.invoice_number}</div>
-                  <div><span className="font-bold">Customer:</span> {selectedInvoice.customer_name}</div>
+                  <div><span className="font-bold">Customer:</span> {selectedInvoice.customer_name || 'Walk-in Customer'}</div>
                 </div>
                 <div className="text-right">
                   <div><span className="font-bold">Date:</span> {formatDate(selectedInvoice.created_at)}</div>
-                  <div><span className="font-bold">Mode:</span> {selectedInvoice.payment_mode}</div>
+                  <div><span className="font-bold">Mode:</span> {selectedInvoice.payment_mode || 'CASH'}</div>
                 </div>
               </div>
 
@@ -232,20 +241,23 @@ export default function InvoicesPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {selectedInvoice.items?.map((item) => (
-                    <tr key={item.id}>
-                      <td className="py-1 max-w-[140px] truncate">{item.product_name}</td>
-                      <td className="py-1 text-center">{item.quantity}</td>
-                      <td className="py-1 text-right">₹{item.unit_price}</td>
-                      <td className="py-1 text-right font-bold">₹{item.total}</td>
-                    </tr>
-                  ))}
+                  {selectedInvoice.items?.map((item) => {
+                    const lineTotal = item.total ?? (item.quantity * item.unit_price);
+                    return (
+                      <tr key={item.id}>
+                        <td className="py-1 max-w-[140px] truncate">{item.product_name}</td>
+                        <td className="py-1 text-center">{item.quantity}</td>
+                        <td className="py-1 text-right">{formatRupee(item.unit_price)}</td>
+                        <td className="py-1 text-right font-bold">{formatRupee(lineTotal)}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
 
               <div className="border-t pt-2 space-y-1 text-right font-semibold">
                 <div className="flex justify-between">
-                  <span>Subtotal:</span>
+                  <span>Taxable Value:</span>
                   <span>{formatRupee(selectedInvoice.subtotal)}</span>
                 </div>
                 {selectedInvoice.discount_amount > 0 && (
@@ -255,8 +267,8 @@ export default function InvoicesPage() {
                   </div>
                 )}
                 <div className="flex justify-between text-slate-500 text-[11px]">
-                  <span>GST Amount:</span>
-                  <span>{formatRupee(selectedInvoice.gst_amount)}</span>
+                  <span>GST Included:</span>
+                  <span>{formatRupee(selectedInvoice.gst_amount || 0)}</span>
                 </div>
                 <div className="flex justify-between border-t pt-1 font-black text-sm text-slate-900">
                   <span>Total Payable:</span>

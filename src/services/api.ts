@@ -12,7 +12,7 @@ import {
   PaymentMode,
   StockMovementType,
 } from '@/types/database';
-import { generateInvoiceNumber, generateUuid, isValidUuid } from '@/lib/utils';
+import { generateInvoiceNumber, generateUuid, isValidUuid, calculateGST } from '@/lib/utils';
 import { INITIAL_SHOP, INITIAL_GST_SETTINGS, INITIAL_PRODUCTS } from './mockData';
 
 export const ApiService = {
@@ -128,6 +128,7 @@ export const ApiService = {
             code: error.code,
             details: error.details,
             hint: error.hint,
+            fullError: JSON.stringify(error, null, 2),
           });
           const detailedErr = `[Supabase ${error.code}] ${error.message}${error.hint ? ' (Hint: ' + error.hint + ')' : ''}`;
           return { data: [], error: detailedErr };
@@ -182,7 +183,13 @@ export const ApiService = {
       if (isSupabaseConfigured()) {
         const { error } = await supabase.from('products').update(supabasePayload).eq('id', productData.id).eq('shop_id', shop.id);
         if (error) {
-          console.error('[Supabase updateProduct Error]', error);
+          console.error('[Supabase updateProduct Error]', {
+            message: error.message,
+            code: error.code,
+            details: error.details,
+            hint: error.hint,
+            fullError: JSON.stringify(error, null, 2),
+          });
           if (error.code === '42501') {
             throw new Error('Supabase RLS Policy: Row Level Security is preventing write operations. Enable INSERT/UPDATE policies in your Supabase dashboard.');
           }
@@ -231,7 +238,13 @@ export const ApiService = {
         ...supabasePayload,
       });
       if (error) {
-        console.error('[Supabase saveProduct Insert Error]', error);
+        console.error('[Supabase saveProduct Insert Error]', {
+          message: error.message,
+          code: error.code,
+          details: error.details,
+          hint: error.hint,
+          fullError: JSON.stringify(error, null, 2),
+        });
         if (error.code === '42501') {
           throw new Error('Supabase RLS Policy: Row Level Security is preventing write operations. Enable INSERT/UPDATE policies in your Supabase dashboard.');
         }
@@ -247,7 +260,13 @@ export const ApiService = {
       const shop = await this.getAuthenticatedShop();
       const { error } = await supabase.from('products').delete().eq('id', id).eq('shop_id', shop.id);
       if (error) {
-        console.error('[Supabase deleteProduct Error]', error);
+        console.error('[Supabase deleteProduct Error]', {
+          message: error.message,
+          code: error.code,
+          details: error.details,
+          hint: error.hint,
+          fullError: JSON.stringify(error, null, 2),
+        });
         throw new Error(`[${error.code}] ${error.message}`);
       }
     }
@@ -272,7 +291,13 @@ export const ApiService = {
 
     const { error } = await supabase.from('products').insert(productsToInsert);
     if (error) {
-      console.error('[Supabase Seed Error]', error);
+      console.error('[Supabase Seed Error]', {
+        message: error.message,
+        code: error.code,
+        details: error.details,
+        hint: error.hint,
+        fullError: JSON.stringify(error, null, 2),
+      });
       throw new Error(`[${error.code}] ${error.message}`);
     }
     return productsToInsert.length;
@@ -305,7 +330,13 @@ export const ApiService = {
     };
 
     if (isSupabaseConfigured() && isValidUuid(productId)) {
-      await supabase.from('stock_movements').insert(movement);
+      await supabase.from('stock_movements').insert({
+        id: movement.id,
+        product_id: productId,
+        type: movement.type,
+        quantity: movement.quantity,
+        reason: movement.reason,
+      });
     }
   },
 
@@ -417,7 +448,67 @@ export const ApiService = {
           query = query.eq('shop_id', shop.id);
         }
         const { data, error } = await query.order('created_at', { ascending: false });
-        if (!error && data) return data as Invoice[];
+        if (!error && data) {
+          const customers = await this.getCustomers();
+
+          const normalized: Invoice[] = data.map((inv: any) => {
+            const cust = customers.find((c) => c.id === inv.customer_id);
+            const customerName = inv.customer_name || (cust ? cust.name : 'Walk-in Customer');
+            const customerPhone = inv.customer_phone || (cust ? cust.phone : '');
+            
+            const rawStatus = String(inv.payment_status || 'paid').toUpperCase();
+            const paymentMode = inv.payment_mode || (rawStatus === 'UNPAID' ? 'CREDIT' : 'CASH');
+
+            const normalizedItems = (inv.items || []).map((it: any) => {
+              const qty = Number(it.quantity || 0);
+              const price = Number(it.unit_price || 0);
+              const gstRate = Number(it.gst_rate || 0);
+              const itemSubtotal = qty * price;
+              const basePrice = itemSubtotal / (1 + gstRate / 100);
+              const gstAmt = itemSubtotal - basePrice;
+
+              return {
+                id: it.id,
+                invoice_id: it.invoice_id,
+                product_id: it.product_id,
+                product_name: it.product_name,
+                quantity: qty,
+                unit_price: price,
+                gst_rate: gstRate,
+                gst_amount: Number(gstAmt.toFixed(2)),
+                total: Number(itemSubtotal.toFixed(2)),
+              };
+            });
+
+            const subtotal = Number(inv.subtotal || 0);
+            const discountAmount = Number(inv.discount_amount || 0);
+            const totalAmount = Number(inv.total_amount || (subtotal - discountAmount));
+            const totalGst = normalizedItems.reduce((sum: number, it: any) => sum + (it.gst_amount || 0), 0);
+
+            return {
+              id: inv.id,
+              shop_id: inv.shop_id,
+              customer_id: inv.customer_id,
+              customer_name: customerName,
+              customer_phone: customerPhone,
+              invoice_number: inv.invoice_number,
+              subtotal,
+              discount_amount: discountAmount,
+              gst_amount: Number(totalGst.toFixed(2)),
+              total_amount: totalAmount,
+              paid_amount: rawStatus === 'UNPAID' ? 0 : totalAmount,
+              due_amount: rawStatus === 'UNPAID' ? totalAmount : 0,
+              payment_status: rawStatus as any,
+              payment_mode: paymentMode as any,
+              status: String(inv.status || 'COMPLETED').toUpperCase() as any,
+              notes: inv.notes || '',
+              created_at: inv.created_at || new Date().toISOString(),
+              items: normalizedItems,
+            };
+          });
+
+          return normalized;
+        }
       } catch (err) {
         console.warn('[Supabase getInvoices Error]', err);
       }
@@ -436,25 +527,33 @@ export const ApiService = {
     }[];
     discountAmount: number;
     paymentMode: PaymentMode;
+    referenceNo?: string;
     notes?: string;
   }): Promise<Invoice> {
+    // 1. Get current authenticated user & shop
     const shop = await this.getAuthenticatedShop();
+    
+    if (!shop || !isValidUuid(shop.id)) {
+      throw new Error('No valid shop registered for your account. Please complete Shop Setup.');
+    }
+
     const { data: products } = await this.getProducts();
     const customers = await this.getCustomers();
 
-    let subtotal = 0;
+    let grossTotal = 0;
+    let taxableSubtotal = 0;
     let totalGst = 0;
 
     const invoiceId = generateUuid();
     const invoiceNumber = generateInvoiceNumber('INV');
 
     const invoiceItems = params.items.map((item) => {
-      const lineSubtotal = item.product.price * item.quantity - item.discount;
-      const basePrice = lineSubtotal / (1 + item.product.gst_rate / 100);
-      const gstAmt = lineSubtotal - basePrice;
+      const lineTotal = item.product.price * item.quantity - item.discount;
+      const { taxableAmount, gstAmount } = calculateGST(lineTotal, 1, item.product.gst_rate);
 
-      subtotal += lineSubtotal;
-      totalGst += gstAmt;
+      grossTotal += lineTotal;
+      taxableSubtotal += taxableAmount;
+      totalGst += gstAmount;
 
       return {
         id: generateUuid(),
@@ -464,12 +563,12 @@ export const ApiService = {
         quantity: item.quantity,
         unit_price: item.product.price,
         gst_rate: item.product.gst_rate,
-        gst_amount: Number(gstAmt.toFixed(2)),
-        total: Number(lineSubtotal.toFixed(2)),
+        gst_amount: Number(gstAmount.toFixed(2)),
+        total: Number(lineTotal.toFixed(2)),
       };
     });
 
-    const totalAmount = Math.round(subtotal - params.discountAmount);
+    const totalAmount = Math.round(grossTotal - params.discountAmount);
 
     let paidAmount = totalAmount;
     let dueAmount = 0;
@@ -488,7 +587,7 @@ export const ApiService = {
       customer_name: params.customerName || (params.customerId ? customers.find((c) => c.id === params.customerId)?.name : 'Walk-in Customer'),
       customer_phone: params.customerPhone || (params.customerId ? customers.find((c) => c.id === params.customerId)?.phone : ''),
       invoice_number: invoiceNumber,
-      subtotal: Number(subtotal.toFixed(2)),
+      subtotal: Number(taxableSubtotal.toFixed(2)),
       discount_amount: Number(params.discountAmount.toFixed(2)),
       gst_amount: Number(totalGst.toFixed(2)),
       total_amount: totalAmount,
@@ -502,41 +601,102 @@ export const ApiService = {
       items: invoiceItems,
     };
 
-    // Update stock for sold products
-    for (const item of params.items) {
-      await this.recordStockMovement(item.product.id, 'OUT', item.quantity, `Sale #${invoiceNumber}`);
-    }
-
-    // Save invoice in Supabase
+    // 2. Insert Invoice into public.invoices using exact database columns & normalized status values
     if (isSupabaseConfigured()) {
-      const { error: invErr } = await supabase.from('invoices').insert({
-        id: newInvoice.id,
-        shop_id: newInvoice.shop_id,
-        customer_id: newInvoice.customer_id,
-        invoice_number: newInvoice.invoice_number,
+      const invoicePayload = {
+        id: invoiceId,
+        shop_id: shop.id,
+        customer_id: (params.customerId && isValidUuid(params.customerId)) ? params.customerId : null,
+        invoice_number: invoiceNumber,
         subtotal: newInvoice.subtotal,
         discount_amount: newInvoice.discount_amount,
         total_amount: newInvoice.total_amount,
-        payment_status: newInvoice.payment_status,
-        status: newInvoice.status,
-        notes: newInvoice.notes,
-        created_at: newInvoice.created_at,
-      });
-      if (invErr) console.error('[Supabase Invoice Insert Error]', invErr);
+        payment_status: paymentStatus.toLowerCase(), // 'paid', 'unpaid', 'partial'
+        status: 'completed', // 'completed'
+        notes: params.notes || '',
+      };
 
+      const { data: invData, error: invErr } = await supabase
+        .from('invoices')
+        .insert(invoicePayload)
+        .select()
+        .single();
+
+      if (invErr) {
+        console.error('Supabase Invoice Insert Error', {
+          message: invErr?.message,
+          code: invErr?.code,
+          details: invErr?.details,
+          hint: invErr?.hint,
+          fullError: JSON.stringify(invErr, null, 2),
+        });
+        if (invErr.code === '42501') {
+          throw new Error('Supabase RLS Policy: Row Level Security is preventing invoice creation. Please enable INSERT policy on table "invoices".');
+        }
+        if (invErr.code === '23514') {
+          throw new Error(`Database Constraint Error: [23514] ${invErr.message} (Hint: Ensure payment_status check constraint permits values 'paid', 'unpaid', 'partial').`);
+        }
+        throw new Error(`Invoice Insert Error: [${invErr.code}] ${invErr.message}`);
+      }
+
+      const insertedInvoiceId = invData?.id || invoiceId;
+
+      // 3. Insert Invoice Items into public.invoice_items using exact database columns
       if (newInvoice.items && newInvoice.items.length > 0) {
         const insertItemsPayload = newInvoice.items.map((it) => ({
           id: it.id,
-          invoice_id: it.invoice_id,
-          product_id: it.product_id,
+          invoice_id: insertedInvoiceId,
+          product_id: isValidUuid(it.product_id) ? it.product_id : null,
           product_name: it.product_name,
           quantity: it.quantity,
           unit_price: it.unit_price,
           gst_rate: it.gst_rate,
         }));
+
         const { error: itemErr } = await supabase.from('invoice_items').insert(insertItemsPayload);
-        if (itemErr) console.error('[Supabase Invoice Items Insert Error]', itemErr);
+
+        if (itemErr) {
+          console.error('Supabase Invoice Items Insert Error', {
+            message: itemErr?.message,
+            code: itemErr?.code,
+            details: itemErr?.details,
+            hint: itemErr?.hint,
+            fullError: JSON.stringify(itemErr, null, 2),
+          });
+          if (itemErr.code === '42501') {
+            throw new Error('Supabase RLS Policy: Row Level Security is preventing items creation. Please enable INSERT policy on table "invoice_items".');
+          }
+        }
       }
+
+      // 3.5 Insert Payment record into public.payments table
+      try {
+        const paymentPayload = {
+          id: generateUuid(),
+          shop_id: shop.id,
+          invoice_id: insertedInvoiceId,
+          amount: newInvoice.total_amount,
+          payment_method: params.paymentMode.toLowerCase(),
+          reference_number: params.referenceNo || null,
+          created_at: new Date().toISOString(),
+        };
+
+        const { error: payErr } = await supabase.from('payments').insert(paymentPayload);
+        if (payErr) {
+          console.warn('[Supabase Payment Insert Note]', {
+            message: payErr.message,
+            code: payErr.code,
+            details: payErr.details,
+          });
+        }
+      } catch (pErr) {
+        console.warn('[Payment Insert Catch Exception]', pErr);
+      }
+    }
+
+    // 4. Update stock for sold products
+    for (const item of params.items) {
+      await this.recordStockMovement(item.product.id, 'OUT', item.quantity, `Sale #${invoiceNumber}`);
     }
 
     return newInvoice;

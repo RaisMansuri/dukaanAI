@@ -4,7 +4,8 @@ import React, { useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
 import AppLayout from '@/components/layout/AppLayout';
 import { ApiService } from '@/services/api';
-import { formatRupee, calculateGST } from '@/lib/utils';
+import { formatRupee, calculateGST, formatDate, generateInvoiceNumber } from '@/lib/utils';
+import { useAuth } from '@/context/AuthContext';
 import {
   Search,
   Barcode,
@@ -33,6 +34,7 @@ interface CartItem {
 }
 
 export default function PosPage() {
+  const { shop } = useAuth();
   const [products, setProducts] = useState<Product[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
@@ -51,6 +53,16 @@ export default function PosPage() {
 
   // UI Modals & Drawers
   const [showUpiModal, setShowUpiModal] = useState(false);
+  const [upiTimer, setUpiTimer] = useState<number>(60);
+  const [upiStatus, setUpiStatus] = useState<'PENDING' | 'CONFIRMED' | 'EXPIRED' | 'CANCELLED'>('PENDING');
+  const [upiUtrNumber, setUpiUtrNumber] = useState('');
+  const [upiSessionId, setUpiSessionId] = useState('');
+  const [isProcessingUpi, setIsProcessingUpi] = useState(false);
+  const [copiedUpiId, setCopiedUpiId] = useState(false);
+
+  const [showCardModal, setShowCardModal] = useState(false);
+  const [cardRefNumber, setCardRefNumber] = useState('');
+  const [isProcessingCard, setIsProcessingCard] = useState(false);
   const [showHeldDrawer, setShowHeldDrawer] = useState(false);
   const [heldBills, setHeldBills] = useState<HeldBill[]>([]);
   const [createdInvoice, setCreatedInvoice] = useState<Invoice | null>(null);
@@ -59,6 +71,22 @@ export default function PosPage() {
   const [productsError, setProductsError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const barcodeInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (showUpiModal && upiStatus === 'PENDING') {
+      interval = setInterval(() => {
+        setUpiTimer((prev) => {
+          if (prev <= 1) {
+            setUpiStatus('EXPIRED');
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [showUpiModal, upiStatus]);
 
   useEffect(() => {
     loadPosData();
@@ -164,19 +192,59 @@ export default function PosPage() {
     setCart((prev) => prev.filter((item) => item.product.id !== productId));
   };
 
-  // Calculations
-  const subtotal = cart.reduce((sum, item) => sum + item.product.price * item.quantity - item.discount, 0);
+  // GST-Inclusive Math Calculations
+  const grossTotal = cart.reduce((sum, item) => sum + item.product.price * item.quantity - item.discount, 0);
+
+  const taxableSubtotal = cart.reduce((sum, item) => {
+    const lineTotal = item.product.price * item.quantity - item.discount;
+    const { taxableAmount } = calculateGST(lineTotal, 1, item.product.gst_rate);
+    return sum + taxableAmount;
+  }, 0);
+
   const totalGst = cart.reduce((sum, item) => {
     const lineTotal = item.product.price * item.quantity - item.discount;
     const { gstAmount } = calculateGST(lineTotal, 1, item.product.gst_rate);
     return sum + gstAmount;
   }, 0);
 
-  const grandTotal = Math.max(0, Math.round(subtotal - globalDiscount));
+  const grandTotal = Math.max(0, Math.round(grossTotal - globalDiscount));
 
   const selectedCustomer = customers.find((c) => c.id === selectedCustomerId);
 
-  // Complete Sale
+  // UPI QR Workflow Helpers
+  const handleResetUpiSession = () => {
+    setUpiSessionId(generateInvoiceNumber('INV'));
+    setUpiTimer(60);
+    setUpiStatus('PENDING');
+    setUpiUtrNumber('');
+  };
+
+  const handleCancelUpi = () => {
+    setShowUpiModal(false);
+    setUpiStatus('CANCELLED');
+    setUpiUtrNumber('');
+    setUpiTimer(60);
+  };
+
+  const handleConfirmUpiPayment = async () => {
+    if (upiStatus === 'EXPIRED') {
+      alert('Payment session has expired. Please click "Generate New QR" to start a new session.');
+      return;
+    }
+    setIsProcessingUpi(true);
+    try {
+      setUpiStatus('CONFIRMED');
+      await executeSale(upiUtrNumber);
+    } catch (err: any) {
+      console.error('[UPI Payment Error]', err);
+      alert('Failed to confirm UPI sale: ' + (err.message || 'Unknown database error'));
+      setUpiStatus('PENDING');
+    } finally {
+      setIsProcessingUpi(false);
+    }
+  };
+
+  // Complete Sale Logic
   const handleCompleteSale = async () => {
     if (cart.length === 0) {
       alert('POS Cart is empty! Add products to proceed.');
@@ -189,10 +257,21 @@ export default function PosPage() {
     }
 
     if (paymentMode === 'UPI' && !showUpiModal) {
+      handleResetUpiSession();
       setShowUpiModal(true);
       return;
     }
 
+    if (paymentMode === 'CARD' && !showCardModal) {
+      setCardRefNumber('');
+      setShowCardModal(true);
+      return;
+    }
+
+    await executeSale();
+  };
+
+  const executeSale = async (referenceNo?: string) => {
     setLoading(true);
     try {
       const inv = await ApiService.createInvoice({
@@ -202,6 +281,7 @@ export default function PosPage() {
         items: cart,
         discountAmount: globalDiscount,
         paymentMode,
+        referenceNo,
         notes,
       });
 
@@ -211,11 +291,14 @@ export default function PosPage() {
       setSelectedCustomerId('');
       setNotes('');
       setShowUpiModal(false);
-    } catch (e) {
-      console.error(e);
-      alert('Failed to complete sale. Please try again.');
+      setShowCardModal(false);
+      setCardRefNumber('');
+    } catch (e: any) {
+      console.error('[POS executeSale Error]', e);
+      alert('Failed to complete sale: ' + (e.message || 'Unknown database error'));
     } finally {
       setLoading(false);
+      setIsProcessingCard(false);
     }
   };
 
@@ -598,8 +681,8 @@ export default function PosPage() {
             {/* Total Math Summary */}
             <div className="rounded-2xl bg-slate-900 p-3.5 text-white space-y-1.5 shadow-inner">
               <div className="flex justify-between text-xs text-slate-400">
-                <span>Subtotal ({cart.length} items)</span>
-                <span>{formatRupee(subtotal)}</span>
+                <span>Taxable Value ({cart.length} items)</span>
+                <span>{formatRupee(taxableSubtotal)}</span>
               </div>
               <div className="flex justify-between text-xs text-slate-400">
                 <span>Total GST Included</span>
@@ -642,36 +725,170 @@ export default function PosPage() {
         </div>
       </div>
 
-      {/* UPI QR CODE MODAL */}
-      {showUpiModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl space-y-4 text-center">
-            <div className="font-extrabold text-lg text-slate-900">Scan & Pay via UPI</div>
-            <p className="text-xs text-slate-500">Ask customer to scan using Google Pay, PhonePe, or Paytm</p>
+      {/* ENHANCED COMPACT DYNAMIC UPI QR PAYMENT MODAL */}
+      {showUpiModal && (() => {
+        const merchantName = (shop as any)?.name || 'KM Super Market';
+        const upiId = (shop as any)?.upi_id || 'kmsupermarket@upi';
+        const currentRef = upiSessionId || 'INV-POS-SALE';
+        const upiUri = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(merchantName)}&am=${grandTotal.toFixed(2)}&cu=INR&tn=${encodeURIComponent(currentRef)}`;
+        const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(upiUri)}`;
 
-            <div className="mx-auto flex h-48 w-48 items-center justify-center rounded-2xl border-2 border-dashed border-emerald-500 bg-emerald-50/50 p-4">
-              <QrCode className="h-36 w-36 text-emerald-700" />
-            </div>
+        const formatTimer = (seconds: number) => {
+          const mins = Math.floor(seconds / 60);
+          const secs = seconds % 60;
+          return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+        };
 
-            <div className="text-xl font-black text-slate-900">{formatRupee(grandTotal)}</div>
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/75 p-4 backdrop-blur-sm">
+            <div className="w-full max-w-md rounded-3xl bg-white p-4 sm:p-5 shadow-2xl space-y-3 text-left border border-slate-100">
+              {/* Modal Header */}
+              <div className="flex items-center justify-between border-b pb-2.5">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100">
+                    <QrCode className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-extrabold text-slate-900 text-sm">Pay via UPI / QR Code</h3>
+                    <p className="text-[11px] text-slate-500">Google Pay, PhonePe, Paytm, BHIM</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCancelUpi}
+                  disabled={isProcessingUpi}
+                  className="rounded-full bg-slate-100 p-1.5 text-slate-500 hover:bg-slate-200 transition-colors"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
 
-            <div className="flex gap-2">
-              <button
-                onClick={() => setShowUpiModal(false)}
-                className="w-1/2 rounded-xl border border-slate-300 py-2.5 text-xs font-bold text-slate-700"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleCompleteSale}
-                className="w-1/2 rounded-xl bg-emerald-600 py-2.5 text-xs font-bold text-white shadow-md hover:bg-emerald-700"
-              >
-                Payment Received
-              </button>
+              {/* QR Code Container with Compact Timer Below */}
+              <div className="relative mx-auto flex flex-col items-center justify-center rounded-2xl border border-slate-200 bg-slate-50/70 p-3 text-center">
+                {upiStatus === 'EXPIRED' ? (
+                  <div className="flex h-44 w-44 flex-col items-center justify-center space-y-2 rounded-xl bg-slate-100 text-center p-3">
+                    <AlertCircle className="h-8 w-8 text-red-500" />
+                    <span className="text-xs font-bold text-slate-700">QR Expired</span>
+                    <button
+                      type="button"
+                      onClick={handleResetUpiSession}
+                      className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-emerald-700 transition-all"
+                    >
+                      Refresh QR
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <img
+                      src={qrCodeUrl}
+                      alt="UPI Payment QR Code"
+                      className="h-44 w-44 rounded-xl bg-white p-1.5 shadow-sm border border-slate-200"
+                    />
+                    <p className="mt-1 text-[11px] font-semibold text-slate-600">
+                      Scan with any UPI App to pay
+                    </p>
+                  </>
+                )}
+
+                {/* Compact Timer Directly Below QR Instructions */}
+                <div className="mt-1 flex items-center justify-center gap-1 text-xs">
+                  {upiStatus === 'EXPIRED' ? (
+                    <div className="flex items-center gap-1.5 text-red-600 font-bold">
+                      <AlertCircle className="h-3.5 w-3.5" />
+                      <span>QR Expired</span>
+                      <button
+                        type="button"
+                        onClick={handleResetUpiSession}
+                        className="rounded bg-emerald-600 px-2 py-0.5 text-[10px] font-bold text-white hover:bg-emerald-700 transition-all ml-1"
+                      >
+                        Refresh QR
+                      </button>
+                    </div>
+                  ) : (
+                    <div className={`flex items-center gap-1 font-semibold ${
+                      upiTimer <= 15 ? 'text-red-600 font-extrabold animate-pulse' : 'text-slate-500'
+                    }`}>
+                      <Clock className="h-3.5 w-3.5" />
+                      <span>Expires in <span className="font-mono font-bold">{formatTimer(upiTimer)}</span></span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Payment Destination Details */}
+              <div className="rounded-xl bg-slate-900 px-3.5 py-2.5 text-white space-y-1.5 shadow-inner text-xs">
+                <div className="flex justify-between items-center text-slate-300">
+                  <span>Paying To:</span>
+                  <span className="font-extrabold text-white">{merchantName}</span>
+                </div>
+
+                <div className="flex justify-between items-center border-t border-slate-800 pt-1.5 text-slate-300">
+                  <span>UPI ID:</span>
+                  <div className="flex items-center gap-1.5 font-mono font-bold text-emerald-400 text-xs">
+                    <span>{upiId}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard?.writeText(upiId);
+                        setCopiedUpiId(true);
+                        setTimeout(() => setCopiedUpiId(false), 2000);
+                      }}
+                      className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-300 hover:bg-slate-700 transition-all"
+                    >
+                      {copiedUpiId ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex justify-between items-center border-t border-slate-800 pt-1.5 font-bold text-slate-300">
+                  <span>Payable Amount:</span>
+                  <span className="text-base font-black text-emerald-400">{formatRupee(grandTotal)}</span>
+                </div>
+              </div>
+
+              {/* Cashier Payment Confirmation Section */}
+              <div className="space-y-2 border-t pt-2.5">
+                <div className="space-y-1">
+                  <input
+                    type="text"
+                    placeholder="UPI Transaction ID / UTR Number (Optional)"
+                    value={upiUtrNumber}
+                    onChange={(e) => setUpiUtrNumber(e.target.value)}
+                    disabled={upiStatus === 'EXPIRED' || isProcessingUpi}
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs font-medium focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 focus:outline-none transition-all"
+                  />
+                </div>
+
+                <div className="flex gap-2 pt-0.5">
+                  <button
+                    type="button"
+                    onClick={handleCancelUpi}
+                    disabled={isProcessingUpi}
+                    className="w-1/3 rounded-xl border border-slate-300 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-100 transition-all disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmUpiPayment}
+                    disabled={upiStatus === 'EXPIRED' || isProcessingUpi}
+                    className="w-2/3 flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 py-2.5 text-xs font-bold text-white shadow-md hover:bg-emerald-700 transition-all disabled:opacity-50"
+                  >
+                    {isProcessingUpi ? (
+                      <span>Confirming...</span>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="h-4 w-4" />
+                        <span>Confirm Payment</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* HELD BILLS DRAWER */}
       {showHeldDrawer && (
@@ -719,33 +936,171 @@ export default function PosPage() {
         </div>
       )}
 
+      {/* MANUAL CARD PAYMENT CONFIRMATION MODAL */}
+      {showCardModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl space-y-5 text-left border border-slate-100">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b pb-3">
+              <div className="flex items-center gap-3">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 border border-indigo-100">
+                  <CreditCard className="h-6 w-6" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-slate-900 text-base">Confirm Card Payment</h3>
+                  <p className="text-xs text-slate-500">Physical POS Terminal Transaction</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCardModal(false)}
+                disabled={isProcessingCard}
+                className="rounded-full bg-slate-100 p-1.5 text-slate-500 hover:bg-slate-200 transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Total Amount Container */}
+            <div className="rounded-2xl bg-slate-900 p-4 text-white space-y-1 shadow-inner">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Card Payment Amount</div>
+              <div className="text-2xl font-black text-emerald-400">{formatRupee(grandTotal)}</div>
+            </div>
+
+            {/* Status Instructions */}
+            <div className="rounded-xl bg-amber-50 p-3 border border-amber-200/60 text-amber-800 text-xs flex items-start gap-2.5">
+              <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-bold block">Physical Machine Notice:</span>
+                <span>Please collect payment using your physical card machine / POS terminal before confirming.</span>
+              </div>
+            </div>
+
+            {/* Reference Number Field */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-bold text-slate-700">
+                Transaction / Reference Number <span className="font-normal text-slate-400">(Optional)</span>
+              </label>
+              <input
+                type="text"
+                placeholder="Enter card terminal reference number"
+                value={cardRefNumber}
+                onChange={(e) => setCardRefNumber(e.target.value)}
+                disabled={isProcessingCard}
+                className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-xs font-medium focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 focus:outline-none transition-all"
+              />
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowCardModal(false)}
+                disabled={isProcessingCard}
+                className="w-1/2 rounded-xl border border-slate-300 py-3 text-xs font-bold text-slate-700 hover:bg-slate-50 transition-all disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isProcessingCard}
+                onClick={async () => {
+                  setIsProcessingCard(true);
+                  await executeSale(cardRefNumber);
+                }}
+                className="w-1/2 flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 py-3 text-xs font-bold text-white shadow-lg shadow-emerald-600/20 hover:bg-emerald-700 transition-all disabled:opacity-50"
+              >
+                {isProcessingCard ? (
+                  <span>Recording...</span>
+                ) : (
+                  <>
+                    <CheckCircle2 className="h-4 w-4" />
+                    <span>✓ Confirm Payment</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* SUCCESS RECEIPT MODAL */}
       {createdInvoice && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 p-4 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl space-y-4 text-center">
-            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100 text-emerald-600 no-print">
               <CheckCircle2 className="h-8 w-8" />
             </div>
 
-            <h2 className="text-xl font-extrabold text-slate-900">Bill Created Successfully!</h2>
-            <p className="text-xs text-slate-500">Invoice #{createdInvoice.invoice_number}</p>
+            <h2 className="text-xl font-extrabold text-slate-900 no-print">Bill Created Successfully!</h2>
+            <p className="text-xs text-slate-500 no-print">Invoice #{createdInvoice.invoice_number}</p>
 
-            <div className="rounded-2xl bg-slate-50 p-4 border text-left text-xs space-y-1">
-              <div className="flex justify-between">
-                <span>Customer:</span>
-                <span className="font-bold">{createdInvoice.customer_name}</span>
+            {/* Printable Receipt Container */}
+            <div id="printable-receipt" className="rounded-2xl bg-slate-50 p-4 border text-left text-xs space-y-3">
+              <div className="text-center space-y-0.5 border-b pb-2">
+                <div className="font-extrabold text-base text-slate-900">{(shop as any)?.name || 'Shree Ganesh Super Market'}</div>
+                <div>{(shop as any)?.address || 'Main Market Road, Andheri West, Mumbai'}</div>
+                <div>GSTIN: {(shop as any)?.gst_number || '27AAACG1234F1Z5'} &bull; Ph: {(shop as any)?.phone || '+91 98200 12345'}</div>
               </div>
-              <div className="flex justify-between">
-                <span>Payment Mode:</span>
-                <span className="font-bold">{createdInvoice.payment_mode}</span>
+
+              <div className="flex justify-between border-b pb-2 text-[11px]">
+                <div>
+                  <div><span className="font-bold">Invoice #:</span> {createdInvoice.invoice_number}</div>
+                  <div><span className="font-bold">Customer:</span> {createdInvoice.customer_name || 'Walk-in Customer'}</div>
+                </div>
+                <div className="text-right">
+                  <div><span className="font-bold">Date:</span> {formatDate(createdInvoice.created_at)}</div>
+                  <div><span className="font-bold">Mode:</span> {createdInvoice.payment_mode || 'CASH'}</div>
+                </div>
               </div>
-              <div className="flex justify-between border-t pt-1 font-black text-sm text-slate-900">
-                <span>Total Amount Paid:</span>
-                <span className="text-emerald-600">{formatRupee(createdInvoice.total_amount)}</span>
+
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="border-b font-bold">
+                    <th className="py-1">Item</th>
+                    <th className="py-1 text-center">Qty</th>
+                    <th className="py-1 text-right">Price</th>
+                    <th className="py-1 text-right">Total</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {createdInvoice.items?.map((item) => {
+                    const lineTotal = item.total ?? (item.quantity * item.unit_price);
+                    return (
+                      <tr key={item.id}>
+                        <td className="py-1 max-w-[140px] truncate">{item.product_name}</td>
+                        <td className="py-1 text-center">{item.quantity}</td>
+                        <td className="py-1 text-right">{formatRupee(item.unit_price)}</td>
+                        <td className="py-1 text-right font-bold">{formatRupee(lineTotal)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+
+              <div className="border-t pt-2 space-y-1 text-right font-semibold">
+                <div className="flex justify-between">
+                  <span>Taxable Value:</span>
+                  <span>{formatRupee(createdInvoice.subtotal)}</span>
+                </div>
+                {createdInvoice.discount_amount > 0 && (
+                  <div className="flex justify-between text-amber-600">
+                    <span>Discount:</span>
+                    <span>-{formatRupee(createdInvoice.discount_amount)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-slate-500 text-[11px]">
+                  <span>GST Included:</span>
+                  <span>{formatRupee(createdInvoice.gst_amount || 0)}</span>
+                </div>
+                <div className="flex justify-between border-t pt-1 font-black text-sm text-slate-900">
+                  <span>Total Payable:</span>
+                  <span>{formatRupee(createdInvoice.total_amount)}</span>
+                </div>
               </div>
             </div>
 
-            <div className="flex gap-2">
+            <div className="flex gap-2 no-print">
               <button
                 onClick={() => setCreatedInvoice(null)}
                 className="w-1/2 rounded-xl border border-slate-300 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-100"

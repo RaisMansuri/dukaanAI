@@ -74,19 +74,25 @@ export function isValidUuid(str: string): boolean {
   return uuidRegex.test(str);
 }
 
+/**
+ * Standard Indian GST-Inclusive Calculation Formula
+ * taxableAmount = total * 100 / (100 + gstRate)
+ * gstAmount = total - taxableAmount
+ */
 export function calculateGST(
   price: number,
   quantity: number,
   gstRate: number
-): { basePrice: number; gstAmount: number; total: number; cgst: number; sgst: number } {
+): { taxableAmount: number; basePrice: number; gstAmount: number; total: number; cgst: number; sgst: number } {
   const lineTotal = price * quantity;
-  const basePrice = lineTotal / (1 + gstRate / 100);
-  const gstAmount = lineTotal - basePrice;
+  const taxableAmount = (lineTotal * 100) / (100 + gstRate);
+  const gstAmount = lineTotal - taxableAmount;
   const cgst = gstAmount / 2;
   const sgst = gstAmount / 2;
 
   return {
-    basePrice: Number(basePrice.toFixed(2)),
+    taxableAmount: Number(taxableAmount.toFixed(2)),
+    basePrice: Number(taxableAmount.toFixed(2)),
     gstAmount: Number(gstAmount.toFixed(2)),
     total: Number(lineTotal.toFixed(2)),
     cgst: Number(cgst.toFixed(2)),
