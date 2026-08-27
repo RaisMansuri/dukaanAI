@@ -30,6 +30,8 @@ const KEYS = {
   PAYMENTS: 'dukaan_payments',
   STOCK_MOVEMENTS: 'dukaan_stock_movements',
   HELD_BILLS: 'dukaan_held_bills',
+  NOTIFICATION_SETTINGS: 'dukaan_notification_settings',
+  NOTIFICATION_LOGS: 'dukaan_notification_logs',
 };
 
 const isBrowser = typeof window !== 'undefined';
@@ -80,7 +82,13 @@ export const Storage = {
   setStockMovements: (movements: StockMovement[]) => setItem(KEYS.STOCK_MOVEMENTS, movements),
 
   getHeldBills: (): HeldBill[] => getItem(KEYS.HELD_BILLS, []),
-  setHeldBills: (heldBills: HeldBill[]) => setItem(KEYS.HELD_BILLS, heldBills),
+  setHeldBills: (bills: HeldBill[]) => setItem(KEYS.HELD_BILLS, bills),
+
+  getNotificationSettings: (): any => getItem(KEYS.NOTIFICATION_SETTINGS, null),
+  setNotificationSettings: (settings: any) => setItem(KEYS.NOTIFICATION_SETTINGS, settings),
+
+  getNotificationLogs: (): any[] => getItem(KEYS.NOTIFICATION_LOGS, []),
+  setNotificationLogs: (logs: any[]) => setItem(KEYS.NOTIFICATION_LOGS, logs),
 
   resetAll: () => {
     if (!isBrowser) return;

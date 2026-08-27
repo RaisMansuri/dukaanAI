@@ -99,3 +99,24 @@ export function calculateGST(
     sgst: Number(sgst.toFixed(2)),
   };
 }
+
+export function isValidIndianMobile(phone: string): boolean {
+  if (!phone) return false;
+  const digitsOnly = phone.replace(/\D/g, '');
+  // Should be 10 digits starting with 6, 7, 8, or 9 (or 12 digits if starting with 91)
+  if (digitsOnly.length === 10) {
+    return /^[6-9]\d{9}$/.test(digitsOnly);
+  }
+  if (digitsOnly.length === 12 && digitsOnly.startsWith('91')) {
+    return /^[6-9]\d{9}$/.test(digitsOnly.slice(2));
+  }
+  return false;
+}
+
+export function isValidGstin(gstin: string): boolean {
+  if (!gstin) return true; // optional
+  const trimmed = gstin.trim().toUpperCase();
+  if (trimmed.length === 0) return true;
+  return /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(trimmed);
+}
+

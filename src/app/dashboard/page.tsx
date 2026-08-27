@@ -136,7 +136,7 @@ export default function DashboardPage() {
             </div>
             <div className="text-2xl font-black text-amber-900">{formatRupee(stats.totalDueAmount)}</div>
             <div className="text-[11px] text-amber-700 mt-1 font-medium">
-              <Link href="/customers" className="underline hover:text-amber-900">Collect pending udhar &rarr;</Link>
+              <Link href="/dues" className="underline hover:text-amber-900 font-bold">Collect & manage dues &rarr;</Link>
             </div>
           </div>
 
@@ -276,10 +276,10 @@ export default function DashboardPage() {
                       </div>
                     </div>
                     <Link
-                      href="/products"
+                      href="/inventory"
                       className="rounded-lg bg-amber-600 px-2.5 py-1 text-[11px] font-bold text-white shadow-sm hover:bg-amber-700 transition-colors"
                     >
-                      Restock
+                      Manage & Restock
                     </Link>
                   </div>
                 ))

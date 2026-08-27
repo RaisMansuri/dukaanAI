@@ -56,6 +56,15 @@ export default function PosPage() {
   const [paymentMode, setPaymentMode] = useState<PaymentMode>('UPI');
   const [notes, setNotes] = useState('');
 
+  // POS Quick Add Customer Modal
+  const [showQuickAddCustomer, setShowQuickAddCustomer] = useState(false);
+  const [quickCustName, setQuickCustName] = useState('');
+  const [quickCustPhone, setQuickCustPhone] = useState('');
+  const [quickCustEmail, setQuickCustEmail] = useState('');
+  const [quickCustAddress, setQuickCustAddress] = useState('');
+  const [quickCustGstin, setQuickCustGstin] = useState('');
+  const [quickAddError, setQuickAddError] = useState<string | null>(null);
+
   // UI Modals & Drawers
   const [showUpiModal, setShowUpiModal] = useState(false);
   const [upiTimer, setUpiTimer] = useState<number>(60);
@@ -249,6 +258,44 @@ export default function PosPage() {
     }
   };
 
+  // Customer Quick Add Handler
+  const handleQuickAddCustomer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quickCustName.trim() || !quickCustPhone.trim()) {
+      setQuickAddError('Customer Name and Mobile Number are required.');
+      return;
+    }
+    setQuickAddError(null);
+    try {
+      const newCust = await ApiService.saveCustomer({
+        name: quickCustName.trim(),
+        phone: quickCustPhone.trim(),
+        email: quickCustEmail.trim(),
+        address: quickCustAddress.trim(),
+        gstin: quickCustGstin.trim(),
+        credit_limit: 5000,
+      });
+
+      const freshCusts = await ApiService.getCustomers();
+      setCustomers(freshCusts);
+
+      setSelectedCustomerId(newCust.id);
+      setCustomerPhone(newCust.phone ? newCust.phone.replace(/\D/g, '').slice(-10) : '');
+      setCustomerName(newCust.name);
+      setIsExistingCustomer(true);
+      setIsNewCustomer(false);
+
+      setShowQuickAddCustomer(false);
+      setQuickCustName('');
+      setQuickCustPhone('');
+      setQuickCustEmail('');
+      setQuickCustAddress('');
+      setQuickCustGstin('');
+    } catch (err: any) {
+      setQuickAddError(err?.message || 'Failed to add customer');
+    }
+  };
+
   // Customer Search & Selection Handlers
   const handlePhoneChange = (val: string) => {
     const raw = val.replace(/\D/g, '').slice(0, 10);
@@ -301,6 +348,7 @@ export default function PosPage() {
 
   // Complete Sale Logic
   const handleCompleteSale = async () => {
+    if (loading) return;
     if (cart.length === 0) {
       alert('POS Cart is empty! Add products to proceed.');
       return;
@@ -579,6 +627,15 @@ export default function PosPage() {
                           <div className="text-[10px] text-slate-400">
                             GST {product.gst_rate}% &bull; {product.stock_qty} {product.unit}
                           </div>
+                          {product.stock_qty === 0 ? (
+                            <span className="inline-block mt-0.5 rounded-full bg-red-100 px-1.5 py-0.5 text-[9px] font-black text-red-800">
+                              OUT OF STOCK
+                            </span>
+                          ) : product.stock_qty <= product.min_stock_alert ? (
+                            <span className="inline-block mt-0.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-black text-amber-900">
+                              Only {product.stock_qty} left!
+                            </span>
+                          ) : null}
                         </div>
 
                         <button
@@ -631,16 +688,35 @@ export default function PosPage() {
                 <label className="block text-xs font-semibold text-slate-700 flex items-center gap-1">
                   <Users className="h-3.5 w-3.5 text-slate-400" /> Customer Account
                 </label>
-                {isExistingCustomer && (
-                  <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                    ✓ Found
-                  </span>
-                )}
-                {isNewCustomer && (
-                  <span className="text-[10px] font-extrabold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
-                    + New Customer
-                  </span>
-                )}
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuickCustName('');
+                      setQuickCustPhone('');
+                      setQuickCustEmail('');
+                      setQuickCustAddress('');
+                      setQuickCustGstin('');
+                      setQuickAddError(null);
+                      setShowQuickAddCustomer(true);
+                    }}
+                    className="text-[10px] font-bold text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 px-2 py-0.5 rounded-lg border border-emerald-200 transition-all flex items-center gap-1"
+                  >
+                    <Plus className="h-3 w-3" /> Quick Add
+                  </button>
+
+                  {isExistingCustomer && (
+                    <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                      ✓ Found
+                    </span>
+                  )}
+                  {isNewCustomer && (
+                    <span className="text-[10px] font-extrabold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
+                      + New Customer
+                    </span>
+                  )}
+                </div>
               </div>
 
               <select
@@ -1237,6 +1313,115 @@ export default function PosPage() {
                 <Printer className="h-4 w-4" /> Print Receipt
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* POS QUICK ADD CUSTOMER MODAL */}
+      {showQuickAddCustomer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b pb-3">
+              <h2 className="font-extrabold text-base text-slate-900 flex items-center gap-2">
+                <Users className="h-5 w-5 text-emerald-600" /> Quick Register Customer
+              </h2>
+              <button
+                onClick={() => setShowQuickAddCustomer(false)}
+                className="rounded-full bg-slate-100 p-1 text-slate-600 hover:bg-slate-200"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {quickAddError && (
+              <div className="rounded-xl bg-red-50 p-3 text-xs font-semibold text-red-800 border border-red-200 flex items-start gap-2">
+                <AlertCircle className="h-4 w-4 text-red-600 flex-shrink-0 mt-0.5" />
+                <div>{quickAddError}</div>
+              </div>
+            )}
+
+            <form onSubmit={handleQuickAddCustomer} className="space-y-3 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Customer Name <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Vikram Sharma"
+                  value={quickCustName}
+                  onChange={(e) => setQuickCustName(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 p-2.5 text-xs focus:border-emerald-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Mobile Number <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="tel"
+                  required
+                  maxLength={15}
+                  placeholder="10-digit Indian mobile number"
+                  value={quickCustPhone}
+                  onChange={(e) => setQuickCustPhone(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 p-2.5 font-mono text-xs focus:border-emerald-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Email (Optional)</label>
+                <input
+                  type="email"
+                  placeholder="customer@example.com"
+                  value={quickCustEmail}
+                  onChange={(e) => setQuickCustEmail(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 p-2.5 text-xs focus:border-emerald-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">GSTIN (Optional)</label>
+                  <input
+                    type="text"
+                    maxLength={15}
+                    placeholder="27AAAAA0000A1Z5"
+                    value={quickCustGstin}
+                    onChange={(e) => setQuickCustGstin(e.target.value.toUpperCase())}
+                    className="w-full rounded-xl border border-slate-300 p-2.5 text-xs font-mono uppercase focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Address (Optional)</label>
+                  <input
+                    type="text"
+                    placeholder="Area / Locality"
+                    value={quickCustAddress}
+                    onChange={(e) => setQuickCustAddress(e.target.value)}
+                    className="w-full rounded-xl border border-slate-300 p-2.5 text-xs focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 border-t pt-3">
+                <button
+                  type="button"
+                  onClick={() => setShowQuickAddCustomer(false)}
+                  className="rounded-xl border border-slate-300 px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-xl bg-emerald-600 px-5 py-2 text-xs font-bold text-white shadow-md hover:bg-emerald-700"
+                >
+                  Add & Select Customer
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

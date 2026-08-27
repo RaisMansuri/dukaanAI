@@ -1,15 +1,18 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import Link from 'next/link';
 import AppLayout from '@/components/layout/AppLayout';
 import { ApiService } from '@/services/api';
 import { formatRupee } from '@/lib/utils';
 import {
   Package,
+  Boxes,
   Plus,
   Search,
   AlertTriangle,
   Edit2,
+  Pencil,
   Trash2,
   Barcode,
   Save,
@@ -20,7 +23,7 @@ import {
 } from 'lucide-react';
 import Pagination from '@/components/common/Pagination';
 import { TableSkeleton, DataGridEmptyState, DataGridErrorState } from '@/components/common/GridStateComponents';
-import { Product, UnitType } from '@/types/database';
+import { Product, UnitType, StockMovementType } from '@/types/database';
 
 export default function ProductsPage() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -124,15 +127,37 @@ export default function ProductsPage() {
 
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingProduct?.name || !editingProduct?.price) {
+    if (!editingProduct?.name || editingProduct?.price === undefined || editingProduct?.price === null) {
       alert('Product Name and Selling Price are required!');
       return;
     }
 
-    await ApiService.saveProduct(editingProduct as any);
-    setShowProductModal(false);
-    setEditingProduct(null);
-    loadProducts();
+    if (Number(editingProduct.stock_qty || 0) < 0) {
+      alert('Stock quantity cannot be negative.');
+      return;
+    }
+
+    if (Number(editingProduct.min_stock_alert || 0) < 0) {
+      alert('Minimum stock alert level cannot be negative.');
+      return;
+    }
+
+    if (Number(editingProduct.price || 0) < 0 || Number(editingProduct.cost_price || 0) < 0) {
+      alert('Prices cannot be negative.');
+      return;
+    }
+
+    console.log('[Dev Log: saveProduct Payload]', editingProduct);
+
+    try {
+      await ApiService.saveProduct(editingProduct as any);
+      setShowProductModal(false);
+      setEditingProduct(null);
+      await loadProducts();
+    } catch (err: any) {
+      console.error('[handleSaveProduct Error]', err);
+      alert('Failed to save product: ' + (err?.message || 'Database update failed.'));
+    }
   };
 
   const handleDeleteProduct = async (id: string, name: string) => {
@@ -146,12 +171,16 @@ export default function ProductsPage() {
     e.preventDefault();
     if (!stockProduct) return;
 
-    await ApiService.recordStockMovement(
-      stockProduct.id,
-      adjustmentType,
-      stockAdjustment,
-      stockReason
-    );
+    let movType: StockMovementType = 'ADJUSTMENT';
+    if (adjustmentType === 'IN') movType = 'STOCK_ADDED';
+    else if (adjustmentType === 'OUT') movType = 'STOCK_REDUCED';
+
+    await ApiService.recordStockMovement({
+      productId: stockProduct.id,
+      movementType: movType,
+      quantityChange: stockAdjustment,
+      notes: stockReason || 'Stock adjustment',
+    });
     setShowStockModal(false);
     setStockProduct(null);
     loadProducts();
@@ -177,27 +206,36 @@ export default function ProductsPage() {
             <p className="text-sm text-slate-500">Manage stock quantities, GST rates, and price catalog</p>
           </div>
 
-          <button
-            onClick={() => {
-              setEditingProduct({
-                name: '',
-                name_hindi: '',
-                category: 'Groceries',
-                barcode: Math.floor(1000000000000 + Math.random() * 9000000000000).toString(),
-                price: 100,
-                cost_price: 80,
-                gst_rate: 5,
-                hsn_code: '1902',
-                stock_qty: 20,
-                min_stock_alert: 5,
-                unit: 'Pcs',
-              });
-              setShowProductModal(true);
-            }}
-            className="flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white shadow-md hover:bg-emerald-700 active:scale-95 transition-all"
-          >
-            <Plus className="h-4 w-4" /> Add New Product
-          </button>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/inventory"
+              className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50 transition-all"
+            >
+              <Boxes className="h-4 w-4 text-emerald-600" /> Stock Ledger
+            </Link>
+
+            <button
+              onClick={() => {
+                setEditingProduct({
+                  name: '',
+                  name_hindi: '',
+                  category: 'Groceries',
+                  barcode: Math.floor(1000000000000 + Math.random() * 9000000000000).toString(),
+                  price: 100,
+                  cost_price: 80,
+                  gst_rate: 5,
+                  hsn_code: '1902',
+                  stock_qty: 20,
+                  min_stock_alert: 5,
+                  unit: 'Pcs',
+                });
+                setShowProductModal(true);
+              }}
+              className="flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white shadow-md hover:bg-emerald-700 active:scale-95 transition-all"
+            >
+              <Plus className="h-4 w-4" /> Add New Product
+            </button>
+          </div>
         </div>
 
         {/* Filter Controls */}
@@ -368,9 +406,10 @@ export default function ProductsPage() {
                                 setEditingProduct(product);
                                 setShowProductModal(true);
                               }}
-                              className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+                              className="rounded-lg border border-slate-200 bg-white p-2 text-slate-600 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-300 shadow-sm transition-all"
+                              title="Edit Product"
                             >
-                              <Edit2 className="h-4 w-4" />
+                              <Pencil className="h-4 w-4 text-slate-600 hover:text-emerald-700" />
                             </button>
 
                             <button

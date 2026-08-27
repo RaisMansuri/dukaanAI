@@ -8,12 +8,16 @@ import {
   Invoice,
   Payment,
   StockMovement,
+  StockNotification,
+  StockNotificationSettings,
+  StockNotificationLog,
+  NotificationChannel,
   HeldBill,
   PaymentMode,
   StockMovementType,
   PaginatedResult,
 } from '@/types/database';
-import { generateInvoiceNumber, generateUuid, isValidUuid, calculateGST } from '@/lib/utils';
+import { generateInvoiceNumber, generateUuid, isValidUuid, calculateGST, isValidIndianMobile, isValidGstin } from '@/lib/utils';
 import { INITIAL_SHOP, INITIAL_GST_SETTINGS, INITIAL_PRODUCTS } from './mockData';
 
 export const ApiService = {
@@ -58,11 +62,18 @@ export const ApiService = {
     const current = await this.getAuthenticatedShop();
     const updated = { ...current, ...shop };
     if (isSupabaseConfigured() && isValidUuid(current.id)) {
-      await supabase.from('shops').update({
+      const { error } = await supabase.from('shops').update({
         shop_name: updated.name,
         address: updated.address,
         phone: updated.phone,
+        gst_number: updated.gst_number,
+        state_code: updated.state_code,
       }).eq('id', current.id);
+
+      if (error) {
+        console.error('[Supabase updateShop Error]', error);
+        throw new Error(`[${error.code}] ${error.message}`);
+      }
     }
     Storage.setShop(updated);
     return updated;
@@ -101,10 +112,15 @@ export const ApiService = {
     const current = await this.getGstSettings();
     const updated = { ...current, ...gst };
     if (isSupabaseConfigured()) {
-      await supabase.from('gst_settings').update({
+      const { error } = await supabase.from('gst_settings').update({
         is_gst_enabled: updated.is_gst_enabled,
         default_gst_rate: updated.default_gst_rate,
       }).eq('shop_id', current.shop_id);
+
+      if (error) {
+        console.error('[Supabase updateGstSettings Error]', error);
+        throw new Error(`[${error.code}] ${error.message}`);
+      }
     }
     Storage.setGstSettings(updated);
     return updated;
@@ -171,6 +187,8 @@ export const ApiService = {
     const supabasePayload: Record<string, any> = {
       shop_id: shop.id,
       name: productData.name,
+      name_hindi: productData.name_hindi || '',
+      category: productData.category || 'General',
       sku: productData.barcode || `SKU-${Date.now().toString().slice(-6)}`,
       barcode: productData.barcode || '',
       selling_price: Number(productData.price),
@@ -178,11 +196,30 @@ export const ApiService = {
       gst_rate: Number(productData.gst_rate || 0),
       hsn_code: productData.hsn_code || '9999',
       unit: productData.unit || 'Pcs',
+      stock_qty: Number(productData.stock_qty || 0),
+      min_stock_alert: Number(productData.min_stock_alert || 5),
     };
 
     if (productData.id && isValidUuid(productData.id)) {
       if (isSupabaseConfigured()) {
-        const { error } = await supabase.from('products').update(supabasePayload).eq('id', productData.id).eq('shop_id', shop.id);
+        let { error } = await supabase.from('products').update(supabasePayload).eq('id', productData.id).eq('shop_id', shop.id);
+        
+        if (error && error.code === '42703') {
+          console.warn('[Supabase updateProduct Column Fallback Retry]', error);
+          const fallbackPayload: Record<string, any> = {
+            shop_id: shop.id,
+            name: productData.name,
+            selling_price: Number(productData.price),
+            purchase_price: Number(productData.cost_price || 0),
+            gst_rate: Number(productData.gst_rate || 0),
+            unit: productData.unit || 'Pcs',
+            stock_quantity: Number(productData.stock_qty || 0),
+            low_stock_threshold: Number(productData.min_stock_alert || 5),
+          };
+          const retryRes = await supabase.from('products').update(fallbackPayload).eq('id', productData.id).eq('shop_id', shop.id);
+          error = retryRes.error;
+        }
+
         if (error) {
           console.error('[Supabase updateProduct Error]', {
             message: error.message,
@@ -197,7 +234,9 @@ export const ApiService = {
           throw new Error(`[${error.code}] ${error.message}`);
         }
       }
-      return {
+      const localProducts = Storage.getProducts();
+      const idx = localProducts.findIndex((p) => p.id === productData.id);
+      const updatedProd: Product = {
         id: productData.id,
         shop_id: shop.id,
         name: productData.name,
@@ -211,8 +250,12 @@ export const ApiService = {
         stock_qty: Number(productData.stock_qty || 0),
         min_stock_alert: Number(productData.min_stock_alert || 5),
         unit: productData.unit || 'Pcs',
-        created_at: new Date().toISOString(),
+        created_at: idx !== -1 ? localProducts[idx].created_at : new Date().toISOString(),
       };
+      if (idx !== -1) localProducts[idx] = updatedProd;
+      else localProducts.push(updatedProd);
+      Storage.setProducts(localProducts);
+      return updatedProd;
     }
 
     const newId = generateUuid();
@@ -234,10 +277,28 @@ export const ApiService = {
     };
 
     if (isSupabaseConfigured()) {
-      const { error } = await supabase.from('products').insert({
+      let { error } = await supabase.from('products').insert({
         id: newId,
         ...supabasePayload,
       });
+
+      if (error && error.code === '42703') {
+        console.warn('[Supabase insertProduct Column Fallback Retry]', error);
+        const fallbackInsert = {
+          id: newId,
+          shop_id: shop.id,
+          name: productData.name,
+          selling_price: Number(productData.price),
+          purchase_price: Number(productData.cost_price || 0),
+          gst_rate: Number(productData.gst_rate || 0),
+          unit: productData.unit || 'Pcs',
+          stock_quantity: Number(productData.stock_qty || 0),
+          low_stock_threshold: Number(productData.min_stock_alert || 5),
+        };
+        const retryRes = await supabase.from('products').insert(fallbackInsert);
+        error = retryRes.error;
+      }
+
       if (error) {
         console.error('[Supabase saveProduct Insert Error]', {
           message: error.message,
@@ -253,6 +314,8 @@ export const ApiService = {
       }
     }
 
+    const localProds = Storage.getProducts();
+    Storage.setProducts([newProduct, ...localProds]);
     return newProduct;
   },
 
@@ -271,6 +334,8 @@ export const ApiService = {
         throw new Error(`[${error.code}] ${error.message}`);
       }
     }
+    const localProducts = Storage.getProducts();
+    Storage.setProducts(localProducts.filter((p) => p.id !== id));
     return true;
   },
 
@@ -304,41 +369,509 @@ export const ApiService = {
     return productsToInsert.length;
   },
 
-  async recordStockMovement(
-    productId: string,
-    type: StockMovementType,
-    quantity: number,
-    reason: string
+  async getNotificationSettings(): Promise<StockNotificationSettings> {
+    const shop = await this.getAuthenticatedShop();
+    const defaultPhone = shop?.phone || '+919820012345';
+
+    if (isSupabaseConfigured()) {
+      try {
+        const { data, error } = await supabase
+          .from('stock_notification_settings')
+          .select('*')
+          .eq('shop_id', shop.id)
+          .single();
+
+        if (!error && data) {
+          return {
+            id: data.id,
+            shop_id: data.shop_id,
+            stock_alerts_enabled: data.stock_alerts_enabled ?? true,
+            sms_alerts_enabled: data.sms_alerts_enabled ?? true,
+            whatsapp_alerts_enabled: data.whatsapp_alerts_enabled ?? true,
+            notification_phone: data.notification_phone || defaultPhone,
+            updated_at: data.updated_at,
+          };
+        }
+      } catch (err) {
+        console.warn('[Supabase getNotificationSettings Error]', err);
+      }
+    }
+
+    const localSettings = Storage.getNotificationSettings();
+    if (localSettings) return localSettings;
+
+    const initialSettings: StockNotificationSettings = {
+      shop_id: shop?.id || 'shop_101',
+      stock_alerts_enabled: true,
+      sms_alerts_enabled: true,
+      whatsapp_alerts_enabled: true,
+      notification_phone: defaultPhone,
+    };
+    Storage.setNotificationSettings(initialSettings);
+    return initialSettings;
+  },
+
+  async updateNotificationSettings(settings: StockNotificationSettings): Promise<StockNotificationSettings> {
+    const shop = await this.getAuthenticatedShop();
+
+    if (!isValidIndianMobile(settings.notification_phone)) {
+      throw new Error('Please enter a valid 10-digit Indian mobile number for notifications.');
+    }
+
+    const payload: StockNotificationSettings = {
+      ...settings,
+      shop_id: shop?.id || settings.shop_id,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (isSupabaseConfigured()) {
+      const { error } = await supabase
+        .from('stock_notification_settings')
+        .upsert({
+          shop_id: shop.id,
+          stock_alerts_enabled: payload.stock_alerts_enabled,
+          sms_alerts_enabled: payload.sms_alerts_enabled,
+          whatsapp_alerts_enabled: payload.whatsapp_alerts_enabled,
+          notification_phone: payload.notification_phone,
+          updated_at: payload.updated_at,
+        });
+
+      if (error) {
+        console.error('[Supabase updateNotificationSettings Error]', error);
+      }
+    }
+
+    Storage.setNotificationSettings(payload);
+    return payload;
+  },
+
+  async checkAndTriggerStockAlert(
+    product: Product,
+    previousStock?: number
   ): Promise<void> {
+    try {
+      const shop = await this.getAuthenticatedShop();
+      if (!shop) return;
+
+      const settings = await this.getNotificationSettings();
+      if (!settings.stock_alerts_enabled) return;
+
+      const currentStock = product.stock_qty;
+      const minStock = product.min_stock_alert;
+
+      let alertType: 'LOW_STOCK' | 'OUT_OF_STOCK' | null = null;
+      if (currentStock === 0) {
+        alertType = 'OUT_OF_STOCK';
+      } else if (currentStock <= minStock) {
+        alertType = 'LOW_STOCK';
+      }
+
+      if (!alertType) return;
+
+      // Duplicate prevention rule:
+      if (previousStock !== undefined) {
+        if (alertType === 'LOW_STOCK' && previousStock <= minStock) return;
+        if (alertType === 'OUT_OF_STOCK' && previousStock === 0) return;
+      }
+
+      const notifPhone = settings.notification_phone || shop.phone;
+      const smsMessage =
+        alertType === 'OUT_OF_STOCK'
+          ? `🚨 Out of Stock Alert\n\nProduct: ${product.name}\nCurrent Stock: 0 ${product.unit || 'Pcs'}\n\nThis product is currently out of stock.`
+          : `⚠️ Low Stock Alert\n\nProduct: ${product.name}\nCurrent Stock: ${currentStock} ${product.unit || 'Pcs'}\nMinimum Stock Level: ${minStock} ${product.unit || 'Pcs'}\n\nPlease restock this product soon.`;
+
+      const channels: NotificationChannel[] = [];
+      if (settings.sms_alerts_enabled) channels.push('SMS');
+      if (settings.whatsapp_alerts_enabled) channels.push('WHATSAPP');
+
+      const createdLogs: StockNotificationLog[] = [];
+
+      for (const ch of channels) {
+        const logId = generateUuid();
+        const logEntry: StockNotificationLog = {
+          id: logId,
+          shop_id: shop.id,
+          product_id: product.id,
+          product_name: product.name,
+          alert_type: alertType,
+          channel: ch,
+          recipient_phone: notifPhone,
+          message_body: smsMessage,
+          status: 'SIMULATED',
+          provider_response: `${ch}_PROVIDER_SIMULATED_200`,
+          sent_at: new Date().toISOString(),
+        };
+
+        if (isSupabaseConfigured()) {
+          await supabase.from('stock_notification_logs').insert({
+            id: logId,
+            shop_id: shop.id,
+            product_id: product.id,
+            product_name: product.name,
+            alert_type: alertType,
+            channel: ch,
+            recipient_phone: notifPhone,
+            message_body: smsMessage,
+            status: 'SIMULATED',
+            provider_response: logEntry.provider_response,
+            sent_at: logEntry.sent_at,
+          });
+        }
+
+        createdLogs.push(logEntry);
+      }
+
+      const existingStorageLogs = Storage.getNotificationLogs();
+      Storage.setNotificationLogs([...createdLogs, ...existingStorageLogs]);
+    } catch (err) {
+      console.warn('[Stock Notification Alert Error]', err);
+    }
+  },
+
+  async sendTestNotification(): Promise<{ success: boolean; message: string }> {
+    const shop = await this.getAuthenticatedShop();
+    const settings = await this.getNotificationSettings();
+
+    const notifPhone = settings.notification_phone || shop.phone;
+    const testMsg = `🔔 Test Stock Alert Notification\n\nThis is a test alert from DukaanAI for ${shop.name}.\nChannels configured: SMS: ${settings.sms_alerts_enabled ? 'ON' : 'OFF'}, WhatsApp: ${settings.whatsapp_alerts_enabled ? 'ON' : 'OFF'}.`;
+
+    const channels: NotificationChannel[] = [];
+    if (settings.sms_alerts_enabled) channels.push('SMS');
+    if (settings.whatsapp_alerts_enabled) channels.push('WHATSAPP');
+
+    if (channels.length === 0) {
+      throw new Error('Please enable at least SMS or WhatsApp alerts in notification settings.');
+    }
+
+    const createdLogs: StockNotificationLog[] = [];
+
+    for (const ch of channels) {
+      const logId = generateUuid();
+      const logEntry: StockNotificationLog = {
+        id: logId,
+        shop_id: shop.id,
+        product_id: 'test_prod',
+        product_name: 'System Test Product',
+        alert_type: 'LOW_STOCK',
+        channel: ch,
+        recipient_phone: notifPhone,
+        message_body: testMsg,
+        status: 'SIMULATED',
+        provider_response: `${ch}_TEST_SIMULATED_SUCCESS`,
+        sent_at: new Date().toISOString(),
+      };
+
+      if (isSupabaseConfigured()) {
+        await supabase.from('stock_notification_logs').insert({
+          id: logId,
+          shop_id: shop.id,
+          product_id: 'test_prod',
+          product_name: 'System Test Product',
+          alert_type: 'LOW_STOCK',
+          channel: ch,
+          recipient_phone: notifPhone,
+          message_body: testMsg,
+          status: 'SIMULATED',
+          provider_response: logEntry.provider_response,
+          sent_at: logEntry.sent_at,
+        });
+      }
+
+      createdLogs.push(logEntry);
+    }
+
+    const existingStorageLogs = Storage.getNotificationLogs();
+    Storage.setNotificationLogs([...createdLogs, ...existingStorageLogs]);
+
+    return {
+      success: true,
+      message: `Test notification sent via ${channels.join(' & ')} to ${notifPhone}`,
+    };
+  },
+
+  async getPaginatedNotificationLogs(options?: {
+    page?: number;
+    pageSize?: number;
+    search?: string;
+    channelFilter?: string;
+    alertTypeFilter?: string;
+  }): Promise<PaginatedResult<StockNotificationLog>> {
+    const page = Math.max(1, options?.page || 1);
+    const pageSize = Math.max(1, options?.pageSize || 10);
+    const from = (page - 1) * pageSize;
+
+    let logs: StockNotificationLog[] = [];
+
+    if (isSupabaseConfigured()) {
+      try {
+        const shop = await this.getAuthenticatedShop();
+        let query = supabase.from('stock_notification_logs').select('*');
+        if (shop && isValidUuid(shop.id)) {
+          query = query.eq('shop_id', shop.id);
+        }
+        const { data, error } = await query.order('sent_at', { ascending: false });
+
+        if (!error && data) {
+          logs = data.map((l: any) => ({
+            id: l.id,
+            shop_id: l.shop_id || shop.id,
+            product_id: l.product_id,
+            product_name: l.product_name || 'Product',
+            alert_type: l.alert_type || 'LOW_STOCK',
+            channel: l.channel || 'SMS',
+            recipient_phone: l.recipient_phone || '',
+            message_body: l.message_body || '',
+            status: l.status || 'SIMULATED',
+            provider_response: l.provider_response || '',
+            sent_at: l.sent_at || new Date().toISOString(),
+            error_message: l.error_message || '',
+          }));
+        }
+      } catch (err) {
+        console.warn('[Supabase getPaginatedNotificationLogs Error]', err);
+      }
+    }
+
+    if (logs.length === 0) {
+      logs = Storage.getNotificationLogs();
+    }
+
+    if (options?.search) {
+      const s = options.search.toLowerCase().trim();
+      logs = logs.filter(
+        (l) =>
+          l.product_name.toLowerCase().includes(s) ||
+          l.recipient_phone.includes(s) ||
+          l.message_body.toLowerCase().includes(s)
+      );
+    }
+
+    if (options?.channelFilter && options.channelFilter !== 'ALL') {
+      logs = logs.filter((l) => l.channel === options.channelFilter);
+    }
+
+    if (options?.alertTypeFilter && options.alertTypeFilter !== 'ALL') {
+      logs = logs.filter((l) => l.alert_type === options.alertTypeFilter);
+    }
+
+    const totalCount = logs.length;
+    const totalPages = Math.ceil(totalCount / pageSize) || 1;
+    const paginatedData = logs.slice(from, from + pageSize);
+
+    return {
+      data: paginatedData,
+      page,
+      pageSize,
+      totalCount,
+      totalPages,
+    };
+  },
+
+  async recordStockMovement(params: {
+    productId: string;
+    movementType: StockMovementType;
+    quantityChange: number;
+    notes?: string;
+    referenceType?: string;
+    referenceId?: string;
+  }): Promise<void> {
+    const shop = await this.getAuthenticatedShop();
     const { data: products } = await this.getProducts();
-    const product = products.find((p) => p.id === productId);
+    const product = products.find((p) => p.id === params.productId);
     if (!product) return;
 
-    let newQty = product.stock_qty;
-    if (type === 'IN') newQty += quantity;
-    else if (type === 'OUT') newQty = Math.max(0, newQty - quantity);
-    else if (type === 'ADJUSTMENT') newQty = quantity;
+    const previousStock = product.stock_qty;
+    let newStock = previousStock;
 
-    product.stock_qty = newQty;
+    if (
+      params.movementType === 'SALE' ||
+      params.movementType === 'STOCK_REDUCED' ||
+      params.movementType === 'DAMAGED_GOODS' ||
+      params.movementType === 'OUT'
+    ) {
+      newStock = Math.max(0, previousStock - Math.abs(params.quantityChange));
+    } else if (
+      params.movementType === 'STOCK_ADDED' ||
+      params.movementType === 'SUPPLIER_PURCHASE' ||
+      params.movementType === 'RETURN' ||
+      params.movementType === 'CANCELLED_SALE_RESTOCK' ||
+      params.movementType === 'IN'
+    ) {
+      newStock = previousStock + Math.abs(params.quantityChange);
+    } else if (params.movementType === 'ADJUSTMENT') {
+      newStock = Math.max(0, params.quantityChange);
+    }
+
+    product.stock_qty = newStock;
+    const actualQtyChange = newStock - previousStock;
+    const movementId = generateUuid();
 
     const movement: StockMovement = {
-      id: generateUuid(),
-      product_id: productId,
-      type,
-      quantity,
-      reason,
+      id: movementId,
+      shop_id: shop?.id,
+      product_id: product.id,
+      product_name: product.name,
+      movement_type: params.movementType,
+      quantity_change: actualQtyChange,
+      previous_stock: previousStock,
+      new_stock: newStock,
+      reference_type: params.referenceType || 'MANUAL',
+      reference_id: params.referenceId || '',
+      notes: params.notes || '',
       created_at: new Date().toISOString(),
     };
 
-    if (isSupabaseConfigured() && isValidUuid(productId)) {
+    if (isSupabaseConfigured() && isValidUuid(product.id)) {
+      await supabase
+        .from('products')
+        .update({ stock_qty: newStock })
+        .eq('id', product.id);
+
       await supabase.from('stock_movements').insert({
-        id: movement.id,
-        product_id: productId,
-        type: movement.type,
-        quantity: movement.quantity,
-        reason: movement.reason,
+        id: movementId,
+        shop_id: shop?.id,
+        product_id: product.id,
+        product_name: product.name,
+        movement_type: params.movementType,
+        quantity_change: actualQtyChange,
+        previous_stock: previousStock,
+        new_stock: newStock,
+        reference_type: movement.reference_type,
+        reference_id: movement.reference_id,
+        notes: movement.notes,
+        created_at: movement.created_at,
       });
     }
+
+    await this.checkAndTriggerStockAlert(product, previousStock);
+  },
+
+  async adjustProductStock(
+    productId: string,
+    mode: 'ADD' | 'REDUCE' | 'SET',
+    qty: number,
+    reason: string
+  ): Promise<void> {
+    let movementType: StockMovementType = 'ADJUSTMENT';
+    if (mode === 'ADD') movementType = 'STOCK_ADDED';
+    else if (mode === 'REDUCE') movementType = 'STOCK_REDUCED';
+    else movementType = 'ADJUSTMENT';
+
+    await this.recordStockMovement({
+      productId,
+      movementType,
+      quantityChange: qty,
+      notes: reason || `Stock ${mode.toLowerCase()} operation`,
+      referenceType: 'MANUAL_ADJUSTMENT',
+    });
+  },
+
+  async getPaginatedStockMovements(options?: {
+    page?: number;
+    pageSize?: number;
+    search?: string;
+    productId?: string;
+    typeFilter?: string;
+  }): Promise<PaginatedResult<StockMovement>> {
+    const page = Math.max(1, options?.page || 1);
+    const pageSize = Math.max(1, options?.pageSize || 10);
+    const from = (page - 1) * pageSize;
+
+    let movements: StockMovement[] = [];
+
+    if (isSupabaseConfigured()) {
+      try {
+        const shop = await this.getAuthenticatedShop();
+        let query = supabase.from('stock_movements').select('*, products(name)');
+        if (shop && isValidUuid(shop.id)) {
+          query = query.eq('shop_id', shop.id);
+        }
+        if (options?.productId) {
+          query = query.eq('product_id', options.productId);
+        }
+        const { data, error } = await query.order('created_at', { ascending: false });
+
+        if (!error && data) {
+          movements = data.map((m: any) => ({
+            id: m.id,
+            shop_id: m.shop_id || shop?.id,
+            product_id: m.product_id,
+            product_name: m.products?.name || m.product_name || 'Product',
+            movement_type: m.movement_type || m.type || 'ADJUSTMENT',
+            quantity_change: Number(m.quantity_change !== undefined ? m.quantity_change : m.quantity || 0),
+            previous_stock: Number(m.previous_stock || 0),
+            new_stock: Number(m.new_stock || 0),
+            reference_type: m.reference_type || 'MANUAL',
+            reference_id: m.reference_id || '',
+            notes: m.notes || m.reason || '',
+            created_at: m.created_at || new Date().toISOString(),
+          }));
+        }
+      } catch (err) {
+        console.warn('[Supabase getPaginatedStockMovements Error]', err);
+      }
+    }
+
+    if (options?.search) {
+      const s = options.search.toLowerCase().trim();
+      movements = movements.filter(
+        (m) =>
+          (m.product_name && m.product_name.toLowerCase().includes(s)) ||
+          (m.notes && m.notes.toLowerCase().includes(s)) ||
+          (m.reference_id && m.reference_id.toLowerCase().includes(s)) ||
+          m.movement_type.toLowerCase().includes(s)
+      );
+    }
+
+    if (options?.typeFilter && options.typeFilter !== 'ALL') {
+      movements = movements.filter((m) => m.movement_type === options.typeFilter);
+    }
+
+    const totalCount = movements.length;
+    const totalPages = Math.ceil(totalCount / pageSize) || 1;
+    const paginatedData = movements.slice(from, from + pageSize);
+
+    return {
+      data: paginatedData,
+      page,
+      pageSize,
+      totalCount,
+      totalPages,
+    };
+  },
+
+  async getInventoryMetrics() {
+    const { data: products } = await this.getProducts();
+    const totalItems = products.length;
+
+    let inStockCount = 0;
+    let lowStockCount = 0;
+    let outOfStockCount = 0;
+    let totalValuation = 0;
+
+    for (const p of products) {
+      const stock = Number(p.stock_qty || 0);
+      const minAlert = Number(p.min_stock_alert || 0);
+      const costPrice = Number(p.cost_price || p.price || 0);
+
+      totalValuation += stock * costPrice;
+
+      if (stock === 0) {
+        outOfStockCount++;
+      } else if (stock <= minAlert) {
+        lowStockCount++;
+      } else {
+        inStockCount++;
+      }
+    }
+
+    return {
+      totalItems,
+      inStockCount,
+      lowStockCount,
+      outOfStockCount,
+      totalValuation,
+    };
   },
 
   // --- CUSTOMERS ---
@@ -361,62 +894,209 @@ export const ApiService = {
 
   async saveCustomer(customerData: Omit<Customer, 'id' | 'shop_id' | 'total_due' | 'created_at'> & { id?: string }): Promise<Customer> {
     const shop = await this.getAuthenticatedShop();
-    const customers = await this.getCustomers();
+
+    // 1. Indian Mobile Number Validation
+    if (!isValidIndianMobile(customerData.phone)) {
+      throw new Error('Please enter a valid 10-digit Indian mobile number.');
+    }
+
+    // 2. GSTIN Validation if provided
+    if (customerData.gstin && !isValidGstin(customerData.gstin)) {
+      throw new Error('Invalid GSTIN format. Example format: 27AAAAA0000A1Z5');
+    }
+
+    // 3. Shop-scoped Duplicate Mobile Check
+    const cleanPhoneInput = customerData.phone.replace(/\D/g, '').slice(-10);
+    const existingCustomers = await this.getCustomers();
+    const duplicate = existingCustomers.find((c) => {
+      if (customerData.id && c.id === customerData.id) return false;
+      const existingClean = c.phone ? c.phone.replace(/\D/g, '').slice(-10) : '';
+      return existingClean === cleanPhoneInput && cleanPhoneInput.length === 10;
+    });
+
+    if (duplicate) {
+      throw new Error(`Customer with mobile number "${customerData.phone}" already exists in your shop.`);
+    }
+
+    const payload = {
+      name: customerData.name.trim(),
+      phone: customerData.phone.trim(),
+      email: (customerData.email || '').trim(),
+      address: (customerData.address || '').trim(),
+      gstin: (customerData.gstin || '').trim().toUpperCase(),
+      credit_limit: Number(customerData.credit_limit || 5000),
+    };
 
     if (customerData.id && isValidUuid(customerData.id)) {
-      const index = customers.findIndex((c) => c.id === customerData.id);
-      if (index !== -1) {
-        const updated: Customer = {
-          ...customers[index],
-          ...customerData,
-        };
-        customers[index] = updated;
-        if (isSupabaseConfigured()) {
-          await supabase.from('customers').update({
-            name: customerData.name,
-            phone: customerData.phone,
-            address: customerData.address || '',
-          }).eq('id', customerData.id).eq('shop_id', shop.id);
+      if (isSupabaseConfigured()) {
+        const { error } = await supabase
+          .from('customers')
+          .update(payload)
+          .eq('id', customerData.id)
+          .eq('shop_id', shop.id);
+
+        if (error) {
+          console.error('[Supabase updateCustomer Error]', error);
+          throw new Error(`[${error.code}] ${error.message}`);
         }
-        return updated;
       }
+
+      const index = existingCustomers.findIndex((c) => c.id === customerData.id);
+      const updated: Customer = {
+        ...(index !== -1 ? existingCustomers[index] : {}),
+        id: customerData.id,
+        shop_id: shop.id,
+        ...payload,
+        total_due: index !== -1 ? existingCustomers[index].total_due : 0,
+        created_at: index !== -1 ? existingCustomers[index].created_at : new Date().toISOString(),
+      };
+      if (index !== -1) existingCustomers[index] = updated;
+      Storage.setCustomers(existingCustomers);
+      return updated;
     }
 
-    if (isSupabaseConfigured() && customerData.phone) {
-      const { data: existing } = await supabase
-        .from('customers')
-        .select('*')
-        .eq('shop_id', shop.id)
-        .eq('phone', customerData.phone)
-        .maybeSingle();
-
-      if (existing) {
-        return existing as Customer;
-      }
-    }
-
+    const newId = generateUuid();
     const newCustomer: Customer = {
-      id: generateUuid(),
+      id: newId,
       shop_id: shop.id,
-      name: customerData.name,
-      phone: customerData.phone,
-      email: customerData.email || '',
-      address: customerData.address || '',
+      ...payload,
       total_due: 0,
-      credit_limit: Number(customerData.credit_limit || 5000),
       created_at: new Date().toISOString(),
     };
 
     if (isSupabaseConfigured()) {
-      await supabase.from('customers').insert({
-        id: newCustomer.id,
+      const { error } = await supabase.from('customers').insert({
+        id: newId,
         shop_id: shop.id,
-        name: newCustomer.name,
-        phone: newCustomer.phone,
-        address: newCustomer.address,
+        ...payload,
+        total_due: 0,
       });
+
+      if (error) {
+        console.error('[Supabase saveCustomer Insert Error]', error);
+        throw new Error(`[${error.code}] ${error.message}`);
+      }
     }
+
+    Storage.setCustomers([newCustomer, ...existingCustomers]);
     return newCustomer;
+  },
+
+  async deleteCustomer(id: string): Promise<boolean> {
+    const shop = await this.getAuthenticatedShop();
+    if (isSupabaseConfigured() && isValidUuid(id)) {
+      const { error } = await supabase.from('customers').delete().eq('id', id).eq('shop_id', shop.id);
+      if (error) {
+        console.error('[Supabase deleteCustomer Error]', error);
+        throw new Error(`[${error.code}] ${error.message}`);
+      }
+    }
+    const existing = Storage.getCustomers();
+    Storage.setCustomers(existing.filter((c) => c.id !== id));
+    return true;
+  },
+
+  async receiveCustomerPayment(params: {
+    customerId: string;
+    amount: number;
+    paymentMode: PaymentMode;
+    referenceNo?: string;
+    notes?: string;
+    invoiceId?: string;
+  }): Promise<Payment[]> {
+    const shop = await this.getAuthenticatedShop();
+    const customers = await this.getCustomers();
+    const customer = customers.find((c) => c.id === params.customerId);
+    if (!customer) throw new Error('Customer not found');
+
+    const paymentAmount = Number(params.amount);
+    if (paymentAmount <= 0) throw new Error('Payment amount must be greater than 0');
+
+    const allInvoices = await this.getInvoices();
+    let targetInvoices = allInvoices.filter(
+      (inv) => inv.customer_id === params.customerId && inv.status !== 'CANCELLED' && inv.due_amount > 0
+    );
+
+    if (params.invoiceId) {
+      targetInvoices = targetInvoices.filter((inv) => inv.id === params.invoiceId);
+    } else {
+      // Sort oldest due date first (FIFO allocation)
+      targetInvoices.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    }
+
+    let remainingPayment = paymentAmount;
+    const createdPayments: Payment[] = [];
+
+    for (const inv of targetInvoices) {
+      if (remainingPayment <= 0) break;
+
+      const allocation = Math.min(remainingPayment, inv.due_amount);
+      const newPaidAmount = inv.paid_amount + allocation;
+      const newDueAmount = Math.max(0, inv.total_amount - newPaidAmount);
+      const newStatus = newDueAmount === 0 ? 'paid' : (newPaidAmount > 0 ? 'partially_paid' : 'unpaid');
+
+      if (isSupabaseConfigured() && isValidUuid(inv.id)) {
+        await supabase
+          .from('invoices')
+          .update({
+            paid_amount: newPaidAmount,
+            due_amount: newDueAmount,
+            payment_status: newStatus,
+          })
+          .eq('id', inv.id)
+          .eq('shop_id', shop.id);
+      }
+
+      const paymentId = generateUuid();
+      const paymentRecord: Payment = {
+        id: paymentId,
+        shop_id: shop.id,
+        invoice_id: inv.id,
+        invoice_number: inv.invoice_number,
+        customer_id: customer.id,
+        customer_name: customer.name,
+        customer_phone: customer.phone,
+        amount: allocation,
+        payment_mode: params.paymentMode,
+        reference_no: params.referenceNo || '',
+        notes: params.notes || 'Udhar clearance payment',
+        created_at: new Date().toISOString(),
+      };
+
+      if (isSupabaseConfigured()) {
+        await supabase.from('payments').insert({
+          id: paymentId,
+          shop_id: shop.id,
+          invoice_id: inv.id,
+          customer_id: customer.id,
+          amount: allocation,
+          payment_method: params.paymentMode.toLowerCase(),
+          reference_number: params.referenceNo || null,
+          notes: params.notes || null,
+          created_at: paymentRecord.created_at,
+        });
+      }
+
+      createdPayments.push(paymentRecord);
+      remainingPayment -= allocation;
+    }
+
+    // Update customer total_due
+    const newCustomerDue = Math.max(0, customer.total_due - paymentAmount);
+    customer.total_due = newCustomerDue;
+    if (isSupabaseConfigured() && isValidUuid(customer.id)) {
+      await supabase
+        .from('customers')
+        .update({ total_due: newCustomerDue })
+        .eq('id', customer.id)
+        .eq('shop_id', shop.id);
+    }
+
+    const existingPayments = Storage.getPayments();
+    Storage.setPayments([...createdPayments, ...existingPayments]);
+    Storage.setCustomers(customers);
+
+    return createdPayments;
   },
 
   async recordCustomerPayment(
@@ -426,30 +1106,248 @@ export const ApiService = {
     referenceNo?: string,
     notes?: string
   ): Promise<void> {
-    const customers = await this.getCustomers();
-    const customer = customers.find((c) => c.id === customerId);
-    if (!customer) return;
+    await this.receiveCustomerPayment({ customerId, amount, paymentMode, referenceNo, notes });
+  },
 
-    customer.total_due = Math.max(0, customer.total_due - amount);
+  async getCustomersWithDue(options?: {
+    page?: number;
+    pageSize?: number;
+    search?: string;
+  }): Promise<PaginatedResult<Customer & { unpaid_invoice_count: number; oldest_due_date: string | null; last_payment_date: string | null }>> {
+    const page = Math.max(1, options?.page || 1);
+    const pageSize = Math.max(1, options?.pageSize || 10);
+    const from = (page - 1) * pageSize;
 
-    const payment: Payment = {
-      id: generateUuid(),
-      customer_id: customerId,
-      amount,
-      payment_mode: paymentMode,
-      reference_no: referenceNo || '',
-      notes: notes || 'Credit clearance payment',
-      created_at: new Date().toISOString(),
-    };
+    const allCustomers = await this.getCustomers();
+    const allInvoices = await this.getInvoices();
+    const allPaymentsRes = await this.getPaginatedPayments({ pageSize: 1000 });
+    const allPayments = allPaymentsRes.data;
 
-    if (isSupabaseConfigured() && isValidUuid(customerId)) {
-      await supabase.from('customers').update({ total_due: customer.total_due }).eq('id', customerId);
-      await supabase.from('payments').insert({
-        id: payment.id,
-        customer_id: customerId,
-        amount: payment.amount,
-      });
+    let dueCustomers = allCustomers
+      .map((cust) => {
+        const custInvoices = allInvoices.filter(
+          (inv) => inv.customer_id === cust.id && inv.status !== 'CANCELLED' && inv.due_amount > 0
+        );
+        const unpaid_invoice_count = custInvoices.length;
+
+        const sortedInvoiceDates = custInvoices
+          .map((inv) => inv.created_at)
+          .sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
+        const oldest_due_date = sortedInvoiceDates.length > 0 ? sortedInvoiceDates[0] : null;
+
+        const custPayments = allPayments.filter((p) => p.customer_id === cust.id);
+        const sortedPaymentDates = custPayments
+          .map((p) => p.created_at)
+          .sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
+        const last_payment_date = sortedPaymentDates.length > 0 ? sortedPaymentDates[0] : null;
+
+        const totalDueFromInvoices = custInvoices.reduce((sum, inv) => sum + inv.due_amount, 0);
+        const totalDue = totalDueFromInvoices > 0 ? totalDueFromInvoices : cust.total_due;
+
+        return {
+          ...cust,
+          total_due: totalDue,
+          unpaid_invoice_count,
+          oldest_due_date,
+          last_payment_date,
+        };
+      })
+      .filter((cust) => cust.total_due > 0 || cust.unpaid_invoice_count > 0);
+
+    if (options?.search) {
+      const search = options.search.toLowerCase().trim();
+      dueCustomers = dueCustomers.filter(
+        (c) =>
+          c.name.toLowerCase().includes(search) ||
+          (c.phone && c.phone.includes(search)) ||
+          (c.email && c.email.toLowerCase().includes(search))
+      );
     }
+
+    const totalCount = dueCustomers.length;
+    const totalPages = Math.ceil(totalCount / pageSize) || 1;
+    const paginatedData = dueCustomers.slice(from, from + pageSize);
+
+    return {
+      data: paginatedData,
+      page,
+      pageSize,
+      totalCount,
+      totalPages,
+    };
+  },
+
+  async getCustomerDueDetails(customerId: string): Promise<{
+    customer: Customer | null;
+    invoices: Invoice[];
+    totalDue: number;
+  }> {
+    const customers = await this.getCustomers();
+    const customer = customers.find((c) => c.id === customerId) || null;
+
+    const allInvoices = await this.getInvoices();
+    const customerDueInvoices = allInvoices.filter(
+      (inv) => inv.customer_id === customerId && inv.status !== 'CANCELLED' && inv.due_amount > 0
+    );
+
+    const totalDue = customerDueInvoices.reduce((sum, inv) => sum + inv.due_amount, 0);
+
+    return {
+      customer,
+      invoices: customerDueInvoices,
+      totalDue: totalDue || (customer ? customer.total_due : 0),
+    };
+  },
+
+  async getPaginatedPayments(options?: {
+    page?: number;
+    pageSize?: number;
+    search?: string;
+    customerId?: string;
+  }): Promise<PaginatedResult<Payment>> {
+    const page = Math.max(1, options?.page || 1);
+    const pageSize = Math.max(1, options?.pageSize || 10);
+    const from = (page - 1) * pageSize;
+
+    let payments: Payment[] = [];
+
+    if (isSupabaseConfigured()) {
+      try {
+        const shop = await this.getAuthenticatedShop();
+        let query = supabase.from('payments').select('*, invoices(invoice_number), customers(name, phone)');
+        if (shop && isValidUuid(shop.id)) {
+          query = query.eq('shop_id', shop.id);
+        }
+        if (options?.customerId) {
+          query = query.eq('customer_id', options.customerId);
+        }
+        const { data, error } = await query.order('created_at', { ascending: false });
+
+        if (!error && data) {
+          payments = data.map((p: any) => ({
+            id: p.id,
+            shop_id: p.shop_id || shop.id,
+            invoice_id: p.invoice_id,
+            invoice_number: p.invoices?.invoice_number || p.invoice_number || '',
+            customer_id: p.customer_id,
+            customer_name: p.customers?.name || p.customer_name || 'Customer',
+            customer_phone: p.customers?.phone || p.customer_phone || '',
+            amount: Number(p.amount || 0),
+            payment_mode: (String(p.payment_method || 'UPI').toUpperCase()) as PaymentMode,
+            reference_no: p.reference_number || p.reference_no || '',
+            notes: p.notes || '',
+            created_at: p.created_at || new Date().toISOString(),
+          }));
+        }
+      } catch (err) {
+        console.warn('[Supabase getPaginatedPayments Error]', err);
+      }
+    }
+
+    if (payments.length === 0) {
+      payments = Storage.getPayments();
+      if (options?.customerId) {
+        payments = payments.filter((p) => p.customer_id === options.customerId);
+      }
+    }
+
+    if (options?.search) {
+      const s = options.search.toLowerCase().trim();
+      payments = payments.filter(
+        (p) =>
+          (p.customer_name && p.customer_name.toLowerCase().includes(s)) ||
+          (p.customer_phone && p.customer_phone.includes(s)) ||
+          (p.invoice_number && p.invoice_number.toLowerCase().includes(s)) ||
+          (p.reference_no && p.reference_no.toLowerCase().includes(s)) ||
+          p.payment_mode.toLowerCase().includes(s)
+      );
+    }
+
+    const totalCount = payments.length;
+    const totalPages = Math.ceil(totalCount / pageSize) || 1;
+    const paginatedData = payments.slice(from, from + pageSize);
+
+    return {
+      data: paginatedData,
+      page,
+      pageSize,
+      totalCount,
+      totalPages,
+    };
+  },
+
+  async getCustomerById(customerId: string): Promise<{
+    customer: Customer | null;
+    stats: {
+      totalPurchases: number;
+      orderCount: number;
+      totalPaid: number;
+      totalDue: number;
+      lastPurchaseDate: string | null;
+    };
+  }> {
+    const customers = await this.getCustomers();
+    const customer = customers.find((c) => c.id === customerId) || null;
+
+    const allInvoices = await this.getInvoices();
+    const customerInvoices = allInvoices.filter((inv) => inv.customer_id === customerId);
+    const nonCancelledInvoices = customerInvoices.filter((inv) => inv.status !== 'CANCELLED');
+
+    const totalPurchases = nonCancelledInvoices.reduce((sum, inv) => sum + inv.total_amount, 0);
+    const orderCount = nonCancelledInvoices.length;
+    const totalPaid = nonCancelledInvoices.reduce((sum, inv) => sum + inv.paid_amount, 0);
+    const totalDue = customer ? customer.total_due : nonCancelledInvoices.reduce((sum, inv) => sum + inv.due_amount, 0);
+
+    const sortedDates = nonCancelledInvoices
+      .map((inv) => inv.created_at)
+      .sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
+
+    const lastPurchaseDate = sortedDates.length > 0 ? sortedDates[0] : null;
+
+    return {
+      customer,
+      stats: {
+        totalPurchases,
+        orderCount,
+        totalPaid,
+        totalDue,
+        lastPurchaseDate,
+      },
+    };
+  },
+
+  async getCustomerInvoices(
+    customerId: string,
+    options?: { page?: number; pageSize?: number; search?: string }
+  ): Promise<PaginatedResult<Invoice>> {
+    const page = Math.max(1, options?.page || 1);
+    const pageSize = Math.max(1, options?.pageSize || 10);
+    const from = (page - 1) * pageSize;
+
+    const allInvoices = await this.getInvoices();
+    let customerInvoices = allInvoices.filter((inv) => inv.customer_id === customerId);
+
+    if (options?.search) {
+      const s = options.search.toLowerCase().trim();
+      customerInvoices = customerInvoices.filter(
+        (inv) =>
+          inv.invoice_number.toLowerCase().includes(s) ||
+          inv.payment_mode.toLowerCase().includes(s) ||
+          inv.payment_status.toLowerCase().includes(s)
+      );
+    }
+
+    const totalCount = customerInvoices.length;
+    const totalPages = Math.ceil(totalCount / pageSize) || 1;
+    const paginatedData = customerInvoices.slice(from, from + pageSize);
+
+    return {
+      data: paginatedData,
+      page,
+      pageSize,
+      totalCount,
+      totalPages,
+    };
   },
 
   // --- POS & INVOICES ---
@@ -510,6 +1408,26 @@ export const ApiService = {
             const totalAmount = Number(inv.total_amount || (subtotal - discountAmount));
             const totalGst = normalizedItems.reduce((sum: number, it: any) => sum + (it.gst_amount || 0), 0);
 
+            const invPayments = payments.filter((p) => p.invoice_id === inv.id);
+            const totalPaymentsForInv = invPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+
+            let paidAmount = inv.paid_amount !== undefined && inv.paid_amount !== null
+              ? Number(inv.paid_amount)
+              : (rawStatus === 'UNPAID' ? totalPaymentsForInv : (rawStatus === 'PARTIAL' || rawStatus === 'PARTIALLY_PAID' ? totalPaymentsForInv : totalAmount));
+
+            let dueAmount = inv.due_amount !== undefined && inv.due_amount !== null
+              ? Number(inv.due_amount)
+              : Math.max(0, totalAmount - paidAmount);
+
+            let normStatus = rawStatus;
+            if (dueAmount <= 0) {
+              normStatus = 'PAID';
+            } else if (paidAmount > 0) {
+              normStatus = 'PARTIALLY_PAID';
+            } else {
+              normStatus = 'UNPAID';
+            }
+
             return {
               id: inv.id,
               shop_id: inv.shop_id,
@@ -521,9 +1439,9 @@ export const ApiService = {
               discount_amount: discountAmount,
               gst_amount: Number(totalGst.toFixed(2)),
               total_amount: totalAmount,
-              paid_amount: rawStatus === 'UNPAID' ? 0 : totalAmount,
-              due_amount: rawStatus === 'UNPAID' ? totalAmount : 0,
-              payment_status: rawStatus as any,
+              paid_amount: paidAmount,
+              due_amount: dueAmount,
+              payment_status: normStatus as any,
               payment_mode: paymentMode as any,
               status: String(inv.status || 'COMPLETED').toUpperCase() as any,
               notes: referenceNo ? `Ref: ${referenceNo}` : (inv.notes || ''),
@@ -654,13 +1572,37 @@ export const ApiService = {
     page?: number;
     pageSize?: number;
     search?: string;
+    onlyPendingDue?: boolean;
   }): Promise<PaginatedResult<Customer>> {
     const page = Math.max(1, options?.page || 1);
     const pageSize = Math.max(1, options?.pageSize || 10);
     const from = (page - 1) * pageSize;
 
     const allCustomers = await this.getCustomers();
-    let filtered = allCustomers;
+    const allInvoices = await this.getInvoices();
+
+    const enriched = allCustomers.map((cust) => {
+      const custInvoices = allInvoices.filter((inv) => inv.customer_id === cust.id && inv.status !== 'CANCELLED');
+      const total_purchases = custInvoices.reduce((sum, inv) => sum + inv.total_amount, 0);
+      const order_count = custInvoices.length;
+      const sortedDates = custInvoices
+        .map((inv) => inv.created_at)
+        .sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
+      const last_purchase_date = sortedDates.length > 0 ? sortedDates[0] : undefined;
+
+      return {
+        ...cust,
+        total_purchases,
+        order_count,
+        last_purchase_date,
+      };
+    });
+
+    let filtered = enriched;
+
+    if (options?.onlyPendingDue) {
+      filtered = filtered.filter((c) => c.total_due > 0);
+    }
 
     if (options?.search) {
       const search = options.search.toLowerCase().trim();
@@ -668,7 +1610,8 @@ export const ApiService = {
         (c) =>
           c.name.toLowerCase().includes(search) ||
           (c.phone && c.phone.includes(search)) ||
-          (c.email && c.email.toLowerCase().includes(search))
+          (c.email && c.email.toLowerCase().includes(search)) ||
+          (c.gstin && c.gstin.toLowerCase().includes(search))
       );
     }
 
@@ -708,6 +1651,16 @@ export const ApiService = {
 
     const { data: products } = await this.getProducts();
     const customers = await this.getCustomers();
+
+    // Stock availability validation
+    for (const item of params.items) {
+      const liveProduct = products.find((p) => p.id === item.product.id) || item.product;
+      if (liveProduct.stock_qty < item.quantity) {
+        throw new Error(
+          `Insufficient stock for "${liveProduct.name}". Available stock: ${liveProduct.stock_qty} ${liveProduct.unit || 'Pcs'}, Requested: ${item.quantity}`
+        );
+      }
+    }
 
     let grossTotal = 0;
     let taxableSubtotal = 0;
@@ -863,9 +1816,35 @@ export const ApiService = {
       }
     }
 
-    // 4. Update stock for sold products
+    // 4. Update stock for sold products and record SALE movement history
     for (const item of params.items) {
-      await this.recordStockMovement(item.product.id, 'OUT', item.quantity, `Sale #${invoiceNumber}`);
+      await this.recordStockMovement({
+        productId: item.product.id,
+        movementType: 'SALE',
+        quantityChange: item.quantity,
+        notes: `POS Sale Invoice #${invoiceNumber}`,
+        referenceType: 'INVOICE',
+        referenceId: invoiceNumber,
+      });
+    }
+
+    // 5. Update customer's outstanding total_due if Udhar or partial payment
+    if (newInvoice.customer_id && newInvoice.due_amount > 0) {
+      try {
+        const customers = await this.getCustomers();
+        const targetCustomer = customers.find((c) => c.id === newInvoice.customer_id);
+        if (targetCustomer) {
+          const updatedDue = targetCustomer.total_due + newInvoice.due_amount;
+          targetCustomer.total_due = updatedDue;
+          Storage.setCustomers(customers);
+
+          if (isSupabaseConfigured() && isValidUuid(newInvoice.customer_id)) {
+            await supabase.from('customers').update({ total_due: updatedDue }).eq('id', newInvoice.customer_id).eq('shop_id', shop.id);
+          }
+        }
+      } catch (custErr) {
+        console.warn('[Customer Total Due Sync Error]', custErr);
+      }
     }
 
     return newInvoice;

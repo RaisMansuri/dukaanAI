@@ -394,9 +394,10 @@ export default function InvoicesPage() {
                         <td className="p-4 text-right">
                           <button
                             onClick={() => setSelectedInvoice(inv)}
-                            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-100 transition-all"
+                            className="inline-flex items-center rounded-lg border border-slate-200 bg-white p-2 text-slate-600 hover:bg-slate-100 hover:text-slate-900 shadow-sm transition-all"
+                            title="View & Print Invoice Receipt"
                           >
-                            <Eye className="h-3.5 w-3.5 text-slate-500" /> View & Print
+                            <Eye className="h-4 w-4 text-slate-600" />
                           </button>
                         </td>
                       </tr>
