@@ -45,28 +45,31 @@ export default function Navbar() {
   const displayName = profile?.full_name || user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'Shop Owner';
 
   return (
-    <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-emerald-900/10 bg-white/90 px-4 backdrop-blur-md md:px-6">
-      {/* Brand & Shop Title */}
-      <div className="flex items-center gap-3">
+    <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-slate-200/80 bg-white/95 px-4 backdrop-blur-md md:px-6">
+      {/* Mobile Brand Logo (Visible on mobile lg:hidden) */}
+      <div className="flex items-center gap-3 lg:hidden">
         <Link href="/dashboard" className="flex items-center gap-2">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white shadow-md shadow-emerald-500/20">
-            <Store className="h-5 w-5" />
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white shadow-md shadow-emerald-500/20">
+            <Store className="h-4.5 w-4.5" />
           </div>
           <div>
             <div className="flex items-center gap-1.5">
-              <span className="font-extrabold text-xl tracking-tight text-slate-900">
+              <span className="font-extrabold text-base tracking-tight text-slate-900">
                 Dukaan<span className="text-emerald-600">AI</span>
               </span>
-              <span className="rounded-md bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800 border border-amber-300">
+              <span className="rounded-md bg-amber-100 px-1 py-0.2 text-[9px] font-bold text-amber-800 border border-amber-300">
                 IND
               </span>
             </div>
-            <p className="text-xs text-slate-500 font-medium truncate max-w-[180px] sm:max-w-[260px]">
-              {shop?.name || 'Retail Billing System'}
+            <p className="text-[10px] text-slate-500 font-medium truncate max-w-[150px]">
+              {shop?.name || 'Shree Ganesh Super Market'}
             </p>
           </div>
         </Link>
       </div>
+
+      {/* Desktop Left Spacer */}
+      <div className="hidden lg:block" />
 
       {/* Action Controls */}
       <div className="flex items-center gap-2 sm:gap-3">

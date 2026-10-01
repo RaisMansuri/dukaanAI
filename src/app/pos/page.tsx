@@ -658,7 +658,7 @@ export default function PosPage() {
         </div>
 
         {/* RIGHT COLUMN: POS Cart & Checkout (40% width on Desktop) */}
-        <div className="w-full lg:w-96 flex flex-col rounded-3xl border border-slate-200 bg-white p-4 shadow-xl justify-between space-y-4">
+        <div id="pos-cart-container" className="w-full lg:w-96 flex flex-col rounded-3xl border border-slate-200 bg-white p-4 shadow-xl justify-between space-y-4">
           {/* Cart Header */}
           <div className="flex items-center justify-between border-b pb-3">
             <div className="flex items-center gap-2">
@@ -1425,6 +1425,37 @@ export default function PosPage() {
           </div>
         </div>
       )}
+
+      {/* Floating Mobile Sticky Cart Bar */}
+      {cart.length > 0 && (
+        <div className="fixed bottom-16 left-0 right-0 z-30 p-3 bg-slate-900/95 text-white backdrop-blur-md border-t border-slate-800 lg:hidden shadow-2xl flex items-center justify-between animate-fade-in">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-600 text-white font-extrabold text-sm shadow-md">
+              {cart.reduce((sum, item) => sum + item.quantity, 0)}
+            </div>
+            <div>
+              <div className="text-xs font-bold text-white">
+                {cart.length} Product{cart.length > 1 ? 's' : ''} Selected
+              </div>
+              <div className="text-emerald-400 text-sm font-black">
+                Total: {formatRupee(grandTotal)}
+              </div>
+            </div>
+          </div>
+
+          <button
+            onClick={() => {
+              const el = document.getElementById('pos-cart-container');
+              if (el) el.scrollIntoView({ behavior: 'smooth' });
+            }}
+            className="flex items-center gap-1.5 rounded-xl bg-emerald-500 px-4 py-2 text-xs font-extrabold text-slate-950 shadow-md hover:bg-emerald-400 active:scale-95 transition-all"
+          >
+            <span>View Cart & Pay</span>
+            <Zap className="h-3.5 w-3.5 fill-slate-950" />
+          </button>
+        </div>
+      )}
     </AppLayout>
   );
 }
+

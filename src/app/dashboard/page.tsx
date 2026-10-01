@@ -247,9 +247,12 @@ export default function DashboardPage() {
           {/* Low Stock Alert Sidebar (1 Column) */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5 text-amber-500" />
-                <h2 className="text-lg font-bold text-slate-900">Low Stock Alerts</h2>
+              <div>
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="h-5 w-5 text-amber-500" />
+                  <h2 className="text-lg font-bold text-slate-900">Low Stock Alerts</h2>
+                </div>
+                <p className="text-xs text-slate-500">Items below minimum reorder threshold</p>
               </div>
               <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-extrabold text-amber-800">
                 {stats.lowStockProducts.length} Items
