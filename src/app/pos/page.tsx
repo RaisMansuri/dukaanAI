@@ -25,6 +25,9 @@ import {
   X,
   Zap,
   Package,
+  Camera,
+  Loader2,
+  Volume2,
 } from 'lucide-react';
 import { Product, Customer, PaymentMode, Invoice, HeldBill } from '@/types/database';
 
@@ -84,7 +87,136 @@ export default function PosPage() {
   const [loadingProducts, setLoadingProducts] = useState(true);
   const [productsError, setProductsError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  
+  // Barcode Scanner Specific State & Refs
+  const [isScanningLoading, setIsScanningLoading] = useState(false);
+  const [scanFeedback, setScanFeedback] = useState<{
+    type: 'SUCCESS' | 'ERROR' | 'WARNING';
+    message: string;
+    id: number;
+  } | null>(null);
+  const [showCameraModal, setShowCameraModal] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+
   const barcodeInputRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+
+  // Audio Synth Beep Feedback (Web Audio API)
+  const playScanBeep = (type: 'SUCCESS' | 'ERROR') => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      if (type === 'SUCCESS') {
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(880, ctx.currentTime); // A5 pitch
+        gain.gain.setValueAtTime(0.12, ctx.currentTime);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.09);
+      } else {
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(260, ctx.currentTime); // Low error tone
+        gain.gain.setValueAtTime(0.15, ctx.currentTime);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.18);
+      }
+    } catch (err) {
+      // Ignore audio policy restrictions gracefully
+    }
+  };
+
+  // Continuous Auto-Focus Retention for Barcode Input
+  useEffect(() => {
+    const focusBarcode = () => {
+      if (
+        barcodeInputRef.current &&
+        document.activeElement !== barcodeInputRef.current &&
+        !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName || '')
+      ) {
+        barcodeInputRef.current.focus();
+      }
+    };
+
+    focusBarcode();
+    const timer = setTimeout(focusBarcode, 200);
+    return () => clearTimeout(timer);
+  }, [products]);
+
+  // Camera Barcode Scanning Stream Effect
+  useEffect(() => {
+    let animationFrameId: number;
+    let detector: any = null;
+
+    if (showCameraModal) {
+      setCameraError(null);
+      if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
+        try {
+          detector = new (window as any).BarcodeDetector({
+            formats: ['qr_code', 'ean_13', 'ean_8', 'code_128', 'upc_a', 'code_39'],
+          });
+        } catch (e) {
+          console.warn('[BarcodeDetector Exception]', e);
+        }
+      }
+
+      navigator.mediaDevices
+        ?.getUserMedia({ video: { facingMode: 'environment' } })
+        .then((stream) => {
+          mediaStreamRef.current = stream;
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+            videoRef.current.play();
+          }
+
+          const scanFrame = async () => {
+            if (videoRef.current && detector && videoRef.current.readyState === 4) {
+              try {
+                const barcodes = await detector.detect(videoRef.current);
+                if (barcodes.length > 0) {
+                  const code = barcodes[0].rawValue;
+                  if (code) {
+                    stopCamera();
+                    setShowCameraModal(false);
+                    processBarcodeScan(code);
+                    return;
+                  }
+                }
+              } catch (err) {
+                // Ignore frame scan errors
+              }
+            }
+            animationFrameId = requestAnimationFrame(scanFrame);
+          };
+
+          animationFrameId = requestAnimationFrame(scanFrame);
+        })
+        .catch((err) => {
+          setCameraError(
+            'Unable to access camera. Please check camera permissions or use a USB / Bluetooth barcode scanner.'
+          );
+        });
+    } else {
+      stopCamera();
+    }
+
+    return () => {
+      if (animationFrameId) cancelAnimationFrame(animationFrameId);
+      stopCamera();
+    };
+  }, [showCameraModal]);
+
+  const stopCamera = () => {
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
+  };
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -143,21 +275,94 @@ export default function PosPage() {
     }
   };
 
-  // Barcode Scanner Handler
+  // Complete Barcode Scan Processing Engine
+  const processBarcodeScan = (rawCode: string) => {
+    const cleanCode = rawCode.trim();
+    if (!cleanCode) return;
+
+    setIsScanningLoading(true);
+
+    const searchLower = cleanCode.toLowerCase();
+
+    // 1. Search products by exact Barcode, HSN code, or SKU
+    let matched = products.find((p) => {
+      const b = (p.barcode || '').trim().toLowerCase();
+      const hsn = (p.hsn_code || '').trim().toLowerCase();
+      return b === searchLower || hsn === searchLower || p.id.toLowerCase() === searchLower;
+    });
+
+    if (!matched) {
+      // 2. Fallback search: match if product barcode ends with scanned code or includes code (min 4 chars)
+      matched = products.find((p) => {
+        const b = (p.barcode || '').trim().toLowerCase();
+        return b.length >= 4 && (b.endsWith(searchLower) || searchLower.endsWith(b));
+      });
+    }
+
+    if (!matched) {
+      playScanBeep('ERROR');
+      setScanFeedback({
+        type: 'ERROR',
+        message: `❌ Barcode "${cleanCode}" not found in current inventory!`,
+        id: Date.now(),
+      });
+      setBarcodeInput('');
+      setIsScanningLoading(false);
+      setTimeout(() => barcodeInputRef.current?.focus(), 50);
+      return;
+    }
+
+    // 3. Stock Availability Check
+    if (matched.stock_qty <= 0) {
+      playScanBeep('ERROR');
+      setScanFeedback({
+        type: 'WARNING',
+        message: `⚠️ Out of Stock: "${matched.name}" is currently at 0 stock!`,
+        id: Date.now(),
+      });
+      setBarcodeInput('');
+      setIsScanningLoading(false);
+      setTimeout(() => barcodeInputRef.current?.focus(), 50);
+      return;
+    }
+
+    // 4. Cart Stock Limit Check
+    const existingCartItem = cart.find((i) => i.product.id === matched!.id);
+    if (existingCartItem && existingCartItem.quantity >= matched.stock_qty) {
+      playScanBeep('ERROR');
+      setScanFeedback({
+        type: 'WARNING',
+        message: `⚠️ Max Stock Reached: Cannot add more than available ${matched.stock_qty} ${matched.unit}`,
+        id: Date.now(),
+      });
+      setBarcodeInput('');
+      setIsScanningLoading(false);
+      setTimeout(() => barcodeInputRef.current?.focus(), 50);
+      return;
+    }
+
+    // 5. Add / Increment Item in Cart
+    addToCart(matched);
+    playScanBeep('SUCCESS');
+    setScanFeedback({
+      type: 'SUCCESS',
+      message: `✓ Scanned: "${matched.name}" (₹${matched.price}) added to cart!`,
+      id: Date.now(),
+    });
+    setBarcodeInput('');
+    setIsScanningLoading(false);
+
+    // 6. Keep input focused for continuous rapid scanning
+    setTimeout(() => {
+      barcodeInputRef.current?.focus();
+    }, 50);
+  };
+
+  // Form Submit & Manual Scan Button Trigger
   const handleBarcodeSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!barcodeInput.trim()) return;
-
-    const matched = products.find(
-      (p) => p.barcode === barcodeInput.trim() || p.barcode.endsWith(barcodeInput.trim())
-    );
-
-    if (matched) {
-      addToCart(matched);
-      setBarcodeInput('');
-    } else {
-      alert(`No product found matching barcode: ${barcodeInput}`);
-    }
+    processBarcodeScan(barcodeInput);
   };
 
   // Cart Operations
@@ -489,24 +694,66 @@ export default function PosPage() {
             </div>
 
             {/* Barcode Scanner Input */}
-            <form onSubmit={handleBarcodeSubmit} className="relative">
-              <Barcode className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
-              <input
-                ref={barcodeInputRef}
-                type="text"
-                placeholder="Scan / Type Barcode (e.g. 8906007280012)"
-                value={barcodeInput}
-                onChange={(e) => setBarcodeInput(e.target.value)}
-                className="w-full rounded-xl border border-amber-300 bg-amber-50/40 py-2 pl-9 pr-14 text-sm font-mono text-slate-900 focus:border-amber-500 focus:outline-none"
-              />
+            <form onSubmit={handleBarcodeSubmit} className="relative flex items-center gap-1.5">
+              <div className="relative flex-1">
+                <Barcode className="absolute left-3 top-3 h-4 w-4 text-emerald-600" />
+                <input
+                  ref={barcodeInputRef}
+                  type="text"
+                  placeholder="Scan Barcode (USB / Bluetooth / Manual)..."
+                  value={barcodeInput}
+                  onChange={(e) => setBarcodeInput(e.target.value)}
+                  className="w-full rounded-xl border border-emerald-300 bg-emerald-50/30 py-2 pl-9 pr-24 text-sm font-mono text-slate-900 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-500/20 focus:outline-none"
+                />
+                
+                {/* Scanner Active Pill Status */}
+                <span className="absolute right-14 top-2.5 flex items-center gap-1 text-[10px] font-extrabold text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded-full border border-emerald-200">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  <span>Ready</span>
+                </span>
+
+                <button
+                  type="submit"
+                  disabled={isScanningLoading}
+                  className="absolute right-1.5 top-1.5 rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50 transition-all flex items-center gap-1"
+                >
+                  {isScanningLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Scan'}
+                </button>
+              </div>
+
+              {/* Camera Scanner Toggle Button */}
               <button
-                type="submit"
-                className="absolute right-1.5 top-1.5 rounded-lg bg-amber-600 px-2.5 py-1 text-xs font-bold text-white hover:bg-amber-700"
+                type="button"
+                onClick={() => setShowCameraModal(true)}
+                title="Scan using Camera"
+                className="flex items-center justify-center h-9 w-9 rounded-xl border border-slate-300 bg-slate-50 text-slate-700 hover:bg-slate-100 hover:text-slate-900 transition-colors shrink-0"
               >
-                Scan
+                <Camera className="h-4 w-4 text-emerald-600" />
               </button>
             </form>
           </div>
+
+          {/* Real-time Barcode Scan Feedback Toast / Alert Banner */}
+          {scanFeedback && (
+            <div
+              className={`flex items-center justify-between p-3 rounded-2xl text-xs font-bold shadow-sm transition-all animate-fade-in ${
+                scanFeedback.type === 'SUCCESS'
+                  ? 'bg-emerald-50 text-emerald-900 border border-emerald-300'
+                  : scanFeedback.type === 'WARNING'
+                  ? 'bg-amber-50 text-amber-900 border border-amber-300'
+                  : 'bg-red-50 text-red-900 border border-red-300'
+              }`}
+            >
+              <span>{scanFeedback.message}</span>
+              <button
+                type="button"
+                onClick={() => setScanFeedback(null)}
+                className="text-slate-500 hover:text-slate-900 ml-2"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          )}
 
           {/* Category Filter Pills */}
           <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
@@ -1422,6 +1669,60 @@ export default function PosPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* CAMERA BARCODE SCANNER MODAL */}
+      {showCameraModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b pb-3">
+              <div className="flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700">
+                  <Camera className="h-4 w-4" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-sm text-slate-900">Camera Barcode Scanner</h3>
+                  <p className="text-[11px] text-slate-500">Align barcode inside camera view</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowCameraModal(false)}
+                className="rounded-full bg-slate-100 p-1.5 text-slate-600 hover:bg-slate-200"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {cameraError ? (
+              <div className="p-4 rounded-2xl bg-amber-50 text-amber-900 text-xs font-semibold border border-amber-200 space-y-2 text-center">
+                <AlertCircle className="h-6 w-6 text-amber-600 mx-auto" />
+                <p>{cameraError}</p>
+                <p className="text-[10px] text-amber-700 font-normal">
+                  Standard USB & Bluetooth keyboard barcode scanners remain 100% active and ready!
+                </p>
+              </div>
+            ) : (
+              <div className="relative rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 flex items-center justify-center min-h-[220px]">
+                <video ref={videoRef} className="w-full h-56 object-cover" autoPlay playsInline muted />
+                <div className="absolute inset-x-6 top-1/2 -translate-y-1/2 h-24 border-2 border-emerald-500 border-dashed rounded-xl pointer-events-none animate-pulse flex items-center justify-center">
+                  <span className="bg-slate-950/80 text-emerald-400 px-2.5 py-1 text-[10px] font-bold rounded-md shadow-md">
+                    Scanning Barcode...
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end pt-1">
+              <button
+                type="button"
+                onClick={() => setShowCameraModal(false)}
+                className="w-full rounded-xl bg-slate-100 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-200"
+              >
+                Close Camera
+              </button>
+            </div>
           </div>
         </div>
       )}

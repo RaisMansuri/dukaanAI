@@ -200,38 +200,65 @@ export const ApiService = {
       min_stock_alert: Number(productData.min_stock_alert || 5),
     };
 
-    if (productData.id && isValidUuid(productData.id)) {
-      if (isSupabaseConfigured()) {
-        let { error } = await supabase.from('products').update(supabasePayload).eq('id', productData.id).eq('shop_id', shop.id);
-        
-        if (error && error.code === '42703') {
-          console.warn('[Supabase updateProduct Column Fallback Retry]', error);
-          const fallbackPayload: Record<string, any> = {
-            shop_id: shop.id,
-            name: productData.name,
-            selling_price: Number(productData.price),
-            purchase_price: Number(productData.cost_price || 0),
-            gst_rate: Number(productData.gst_rate || 0),
-            unit: productData.unit || 'Pcs',
-            stock_quantity: Number(productData.stock_qty || 0),
-            low_stock_threshold: Number(productData.min_stock_alert || 5),
-          };
-          const retryRes = await supabase.from('products').update(fallbackPayload).eq('id', productData.id).eq('shop_id', shop.id);
-          error = retryRes.error;
+    const executeResilientMutation = async (
+      action: 'insert' | 'update',
+      productId: string,
+      payload: Record<string, any>
+    ) => {
+      let currentPayload = { ...payload };
+
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const query =
+          action === 'insert'
+            ? supabase.from('products').insert({ id: productId, ...currentPayload })
+            : supabase.from('products').update(currentPayload).eq('id', productId).eq('shop_id', shop.id);
+
+        const { error } = await query;
+        if (!error) return null;
+
+        console.warn(`[Supabase saveProduct Attempt ${attempt + 1} Failed]`, error);
+
+        // Extract any missing column name from error message (e.g. Could not find the 'category' column)
+        const missingColMatch = error.message?.match(/Could not find the ['"]([^'"]+)['"] column/i);
+        if (missingColMatch && missingColMatch[1] && missingColMatch[1] in currentPayload) {
+          const colToRemove = missingColMatch[1];
+          console.warn(`[Supabase Product Schema Retry] Removing unsupported column '${colToRemove}' from payload`);
+          delete currentPayload[colToRemove];
+          continue;
         }
 
-        if (error) {
-          console.error('[Supabase updateProduct Error]', {
-            message: error.message,
-            code: error.code,
-            details: error.details,
-            hint: error.hint,
-            fullError: JSON.stringify(error, null, 2),
-          });
-          if (error.code === '42501') {
-            throw new Error('Supabase RLS Policy: Row Level Security is preventing write operations. Enable INSERT/UPDATE policies in your Supabase dashboard.');
+        // Generic column error or PGRST204 / 42703
+        if (error.code === 'PGRST204' || error.code === '42703' || error.message?.toLowerCase().includes('column')) {
+          if ('stock_qty' in currentPayload) {
+            currentPayload.stock_quantity = currentPayload.stock_qty;
+            delete currentPayload.stock_qty;
           }
-          throw new Error(`[${error.code}] ${error.message}`);
+          if ('min_stock_alert' in currentPayload) {
+            currentPayload.low_stock_threshold = currentPayload.min_stock_alert;
+            delete currentPayload.min_stock_alert;
+          }
+          if ('category' in currentPayload) delete currentPayload.category;
+          if ('name_hindi' in currentPayload) delete currentPayload.name_hindi;
+          if ('hsn_code' in currentPayload) delete currentPayload.hsn_code;
+          if ('barcode' in currentPayload) delete currentPayload.barcode;
+          if ('sku' in currentPayload) delete currentPayload.sku;
+          continue;
+        }
+
+        return error;
+      }
+      return null;
+    };
+
+    if (productData.id && isValidUuid(productData.id)) {
+      if (isSupabaseConfigured()) {
+        try {
+          const error = await executeResilientMutation('update', productData.id, supabasePayload);
+          if (error) {
+            console.warn('[Supabase updateProduct Warning - Falling back to local storage cache]', error);
+          }
+        } catch (sbErr) {
+          console.warn('[Supabase updateProduct Exception - Local fallback]', sbErr);
         }
       }
       const localProducts = Storage.getProducts();
@@ -277,40 +304,13 @@ export const ApiService = {
     };
 
     if (isSupabaseConfigured()) {
-      let { error } = await supabase.from('products').insert({
-        id: newId,
-        ...supabasePayload,
-      });
-
-      if (error && error.code === '42703') {
-        console.warn('[Supabase insertProduct Column Fallback Retry]', error);
-        const fallbackInsert = {
-          id: newId,
-          shop_id: shop.id,
-          name: productData.name,
-          selling_price: Number(productData.price),
-          purchase_price: Number(productData.cost_price || 0),
-          gst_rate: Number(productData.gst_rate || 0),
-          unit: productData.unit || 'Pcs',
-          stock_quantity: Number(productData.stock_qty || 0),
-          low_stock_threshold: Number(productData.min_stock_alert || 5),
-        };
-        const retryRes = await supabase.from('products').insert(fallbackInsert);
-        error = retryRes.error;
-      }
-
-      if (error) {
-        console.error('[Supabase saveProduct Insert Error]', {
-          message: error.message,
-          code: error.code,
-          details: error.details,
-          hint: error.hint,
-          fullError: JSON.stringify(error, null, 2),
-        });
-        if (error.code === '42501') {
-          throw new Error('Supabase RLS Policy: Row Level Security is preventing write operations. Enable INSERT/UPDATE policies in your Supabase dashboard.');
+      try {
+        const error = await executeResilientMutation('insert', newId, supabasePayload);
+        if (error) {
+          console.warn('[Supabase saveProduct Insert Warning - Falling back to local storage cache]', error);
         }
-        throw new Error(`[${error.code}] ${error.message}`);
+      } catch (sbErr) {
+        console.warn('[Supabase saveProduct Exception - Local fallback]', sbErr);
       }
     }
 

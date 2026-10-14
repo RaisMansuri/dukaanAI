@@ -20,6 +20,7 @@ import {
   TrendingUp,
   Sparkles,
   RefreshCw,
+  Loader2,
 } from 'lucide-react';
 import Pagination from '@/components/common/Pagination';
 import { TableSkeleton, DataGridEmptyState, DataGridErrorState } from '@/components/common/GridStateComponents';
@@ -42,6 +43,7 @@ export default function ProductsPage() {
   // Modals
   const [showProductModal, setShowProductModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Partial<Product> | null>(null);
+  const [isSavingProduct, setIsSavingProduct] = useState(false);
 
   const [showStockModal, setShowStockModal] = useState(false);
   const [stockProduct, setStockProduct] = useState<Product | null>(null);
@@ -148,6 +150,7 @@ export default function ProductsPage() {
     }
 
     console.log('[Dev Log: saveProduct Payload]', editingProduct);
+    setIsSavingProduct(true);
 
     try {
       await ApiService.saveProduct(editingProduct as any);
@@ -157,6 +160,8 @@ export default function ProductsPage() {
     } catch (err: any) {
       console.error('[handleSaveProduct Error]', err);
       alert('Failed to save product: ' + (err?.message || 'Database update failed.'));
+    } finally {
+      setIsSavingProduct(false);
     }
   };
 
@@ -504,9 +509,14 @@ export default function ProductsPage() {
                   <label className="block font-semibold text-slate-700 mb-1">Selling Price (₹) *</label>
                   <input
                     type="number"
+                    step="any"
+                    min="0"
                     required
-                    value={editingProduct.price || 0}
-                    onChange={(e) => setEditingProduct({ ...editingProduct, price: Number(e.target.value) })}
+                    value={editingProduct.price === 0 && editingProduct.price !== undefined ? 0 : (editingProduct.price ?? '')}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setEditingProduct({ ...editingProduct, price: val === '' ? 0 : Number(val) });
+                    }}
                     className="w-full rounded-xl border border-slate-300 p-2.5 text-xs font-bold focus:border-emerald-500 focus:outline-none"
                   />
                 </div>
@@ -515,8 +525,13 @@ export default function ProductsPage() {
                   <label className="block font-semibold text-slate-700 mb-1">Cost / Purchase Price (₹)</label>
                   <input
                     type="number"
-                    value={editingProduct.cost_price || 0}
-                    onChange={(e) => setEditingProduct({ ...editingProduct, cost_price: Number(e.target.value) })}
+                    step="any"
+                    min="0"
+                    value={editingProduct.cost_price === 0 && editingProduct.cost_price !== undefined ? 0 : (editingProduct.cost_price ?? '')}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setEditingProduct({ ...editingProduct, cost_price: val === '' ? 0 : Number(val) });
+                    }}
                     className="w-full rounded-xl border border-slate-300 p-2.5 text-xs focus:border-emerald-500 focus:outline-none"
                   />
                 </div>
@@ -550,8 +565,13 @@ export default function ProductsPage() {
                   <label className="block font-semibold text-slate-700 mb-1">Stock Quantity</label>
                   <input
                     type="number"
-                    value={editingProduct.stock_qty || 0}
-                    onChange={(e) => setEditingProduct({ ...editingProduct, stock_qty: Number(e.target.value) })}
+                    step="any"
+                    min="0"
+                    value={editingProduct.stock_qty === 0 && editingProduct.stock_qty !== undefined ? 0 : (editingProduct.stock_qty ?? '')}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setEditingProduct({ ...editingProduct, stock_qty: val === '' ? 0 : Number(val) });
+                    }}
                     className="w-full rounded-xl border border-slate-300 p-2.5 text-xs font-bold focus:border-emerald-500 focus:outline-none"
                   />
                 </div>
@@ -578,16 +598,26 @@ export default function ProductsPage() {
               <div className="flex justify-end gap-2 border-t pt-3">
                 <button
                   type="button"
+                  disabled={isSavingProduct}
                   onClick={() => setShowProductModal(false)}
-                  className="rounded-xl border border-slate-300 px-4 py-2 text-xs font-bold text-slate-700"
+                  className="rounded-xl border border-slate-300 px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="flex items-center gap-1 rounded-xl bg-emerald-600 px-5 py-2 text-xs font-bold text-white shadow-md hover:bg-emerald-700"
+                  disabled={isSavingProduct}
+                  className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-5 py-2 text-xs font-bold text-white shadow-md hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                 >
-                  <Save className="h-4 w-4" /> Save Product
+                  {isSavingProduct ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" /> Saving...
+                    </>
+                  ) : (
+                    <>
+                      <Save className="h-4 w-4" /> Save Product
+                    </>
+                  )}
                 </button>
               </div>
             </form>
